@@ -1,0 +1,24 @@
+node_modules/
+.env
+.env.local
+.env*.local
+*.log
+.DS_Store
+
+# Next.js
+.next/
+out/
+next-env.d.ts.bak
+
+# TypeScript
+*.tsbuildinfo
+
+# Vercel
+.vercel
+
+# Reference-only — buddy's Evernude attribution code, kept locally for lookup
+_reference-evernude/
+
+# Local-only files (Claude Code config + planning docs)
+.claude/
+Claude Conversation.docx
