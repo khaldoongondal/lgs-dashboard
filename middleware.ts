@@ -21,6 +21,7 @@ const PUBLIC_PREFIXES = [
   '/api/events',
   '/api/webhooks',
   '/api/health',
+  '/api/cron',
   '/pixel.js',
   '/favicon',
   '/_next',

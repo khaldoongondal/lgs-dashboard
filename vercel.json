@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/meta-spend",
+      "schedule": "0 8 * * *"
+    }
+  ]
+}
