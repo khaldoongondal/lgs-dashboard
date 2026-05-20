@@ -42,6 +42,40 @@ interface InsightRow {
   cpm?:          string;
 }
 
+interface AdStatus {
+  effective_status?:           string;
+  configured_status?:          string;
+  campaign_effective_status?:  string;
+  adset_effective_status?:     string;
+}
+
+async function fetchAdStatuses(account: string, token: string): Promise<Map<string, AdStatus>> {
+  const map = new Map<string, AdStatus>();
+  const fields = 'id,effective_status,configured_status,campaign{effective_status},adset{effective_status}';
+  let next: string | null =
+    `${GRAPH}/${account}/ads?fields=${fields}&limit=200&access_token=${encodeURIComponent(token)}`;
+
+  while (next) {
+    try {
+      const res = await fetch(next, { signal: AbortSignal.timeout(15_000) });
+      const body: any = await res.json();
+      if (!res.ok) break;
+      for (const ad of body.data || []) {
+        map.set(ad.id, {
+          effective_status:           ad.effective_status,
+          configured_status:          ad.configured_status,
+          campaign_effective_status:  ad.campaign?.effective_status,
+          adset_effective_status:     ad.adset?.effective_status,
+        });
+      }
+      next = body.paging?.next ?? null;
+    } catch {
+      break;
+    }
+  }
+  return map;
+}
+
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -96,6 +130,9 @@ export async function GET(req: Request) {
 
   const sb = serviceClient();
   const summary: Array<{ date: string; rows: number; spend: number; error?: string }> = [];
+
+  // Fetch ad statuses ONCE per cron run — same map applies to all dates in the range.
+  const statusMap = await fetchAdStatuses(account, token);
 
   for (const date of dates) {
     const fields = [
@@ -160,7 +197,8 @@ export async function GET(req: Request) {
       ctr:           r.ctr       ? Number(r.ctr)       : null,
       cpc:           r.cpc       ? Number(r.cpc)       : null,
       cpm:           r.cpm       ? Number(r.cpm)       : null,
-      raw_payload:   r,
+      // Stash status flags inside raw_payload — attribution query reads from here
+      raw_payload:   { ...r, ...(statusMap.get(r.ad_id) ?? {}) },
       synced_at:     new Date().toISOString(),
     }));
 
