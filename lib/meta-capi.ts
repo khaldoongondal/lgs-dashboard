@@ -59,7 +59,7 @@ export async function sendCapiEvent(ev: CapiEvent): Promise<CapiResult> {
   const testCode     = env.metaTestEventCode();
 
   if (!pixelId || !accessToken) {
-    return logResult(ev, { ok: false, status: null, response: { error: 'CAPI not configured' }, error: 'CAPI not configured' });
+    return logResult(ev, [], { ok: false, status: null, response: { error: 'CAPI not configured' }, error: 'CAPI not configured' });
   }
 
   const metaEventName = META_EVENT_MAP[ev.eventName];
@@ -70,7 +70,7 @@ export async function sendCapiEvent(ev: CapiEvent): Promise<CapiResult> {
     userInput.fbc = buildFbc((userInput as any).fbclid, ev.fbcCreationTimeMs);
   }
 
-  const userData = await buildUserData(userInput);
+  const { userData, matchKeys } = await buildUserData(userInput);
 
   const event: Record<string, unknown> = {
     event_name:       metaEventName,
@@ -104,7 +104,7 @@ export async function sendCapiEvent(ev: CapiEvent): Promise<CapiResult> {
       signal:  AbortSignal.timeout(8000),
     });
     const body: unknown = await res.json().catch(() => ({}));
-    return logResult(ev, {
+    return logResult(ev, matchKeys, {
       ok: res.ok,
       status: res.status,
       response: body,
@@ -112,25 +112,26 @@ export async function sendCapiEvent(ev: CapiEvent): Promise<CapiResult> {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return logResult(ev, { ok: false, status: null, response: { error: message }, error: message });
+    return logResult(ev, matchKeys, { ok: false, status: null, response: { error: message }, error: message });
   }
 }
 
 /** Best-effort write to capi_event_log. Never throws. */
-async function logResult(ev: CapiEvent, result: CapiResult): Promise<CapiResult> {
+async function logResult(ev: CapiEvent, matchKeys: string[], result: CapiResult): Promise<CapiResult> {
   try {
     const sb = serviceClient();
     await sb.from('capi_event_log').upsert(
       [{
-        event_id:    ev.eventId,
-        event_name:  META_EVENT_MAP[ev.eventName],
-        event_time:  new Date(ev.eventTimeUnix * 1000).toISOString(),
-        source:      ev.source,
-        contact_id:  ev.contactId ?? null,
-        payload:     { internal: ev },
-        response:    result.response as object,
-        sent_ok:     result.ok,
-        last_error:  result.error ?? null,
+        event_id:        ev.eventId,
+        event_name:      META_EVENT_MAP[ev.eventName],
+        event_time:      new Date(ev.eventTimeUnix * 1000).toISOString(),
+        source:          ev.source,
+        contact_id:      ev.contactId ?? null,
+        payload:         { internal: ev },
+        response:        result.response as object,
+        sent_ok:         result.ok,
+        last_error:      result.error ?? null,
+        match_keys_sent: matchKeys,
       }],
       { onConflict: 'event_id,event_name', ignoreDuplicates: false }
     );

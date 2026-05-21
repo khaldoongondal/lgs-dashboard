@@ -1,7 +1,7 @@
 /**
  * Web-Crypto SHA-256 PII hashing for Meta CAPI.
- * Meta requires email / first_name / last_name to be lowercase-trimmed
- * then SHA-256 hashed before transmission.
+ * Meta requires email / first_name / last_name / city / state / country
+ * to be lowercase-trimmed then SHA-256 hashed before transmission.
  *
  * Runs in both Node (>=19, where webcrypto is global) and Edge.
  */
@@ -24,45 +24,76 @@ export async function hashField(value: unknown): Promise<string | null> {
 }
 
 export interface UserDataInput {
-  email?:     string | null;
-  firstName?: string | null;
-  lastName?:  string | null;
-  phone?:     string | null;
-  clientIp?:  string | null;
-  userAgent?: string | null;
-  fbc?:       string | null;
-  fbp?:       string | null;
+  email?:      string | null;
+  firstName?:  string | null;
+  lastName?:   string | null;
+  phone?:      string | null;
+  clientIp?:   string | null;
+  userAgent?:  string | null;
+  fbc?:        string | null;
+  fbp?:        string | null;
   externalId?: string | null;  // fingerprint or our internal contact id
+  city?:       string | null;
+  state?:      string | null;  // 2-letter region code preferred (e.g. "ON", "CA")
+  country?:    string | null;  // 2-letter ISO code (e.g. "us", "ca")
+  zip?:        string | null;
+}
+
+export interface BuildUserDataResult {
+  userData:  Record<string, unknown>;
+  /**
+   * Meta field names actually included in user_data (e.g. "em", "ph", "fbc").
+   * Persisted to capi_event_log.match_keys_sent so we can diagnose EMQ drops.
+   */
+  matchKeys: string[];
 }
 
 /**
  * Build the user_data object for a Meta CAPI event.
- * Hashed: em, fn, ln, ph, external_id
- * Plain: client_ip_address, client_user_agent, fbc, fbp
+ * Hashed: em, fn, ln, ph, external_id, ct (city), st (state), country, zp
+ * Plain:  client_ip_address, client_user_agent, fbc, fbp
  */
-export async function buildUserData(input: UserDataInput): Promise<Record<string, unknown>> {
+export async function buildUserData(input: UserDataInput): Promise<BuildUserDataResult> {
   const ud: Record<string, unknown> = {};
+  const keys: string[] = [];
 
-  const [em, fn, ln, ph, ext] = await Promise.all([
+  // City normalization: lowercase, strip punctuation/whitespace (Meta convention).
+  const cityNorm = input.city ? input.city.toLowerCase().replace(/[^a-z]/g, '') : null;
+  // State: prefer 2-letter code, but also accept full names — Meta hashes whatever we send.
+  const stateNorm = input.state ? input.state.toLowerCase().replace(/[^a-z0-9]/g, '') : null;
+  // Country: ISO-2 lowercase.
+  const countryNorm = input.country ? input.country.toLowerCase().slice(0, 2) : null;
+  // Zip: digits only.
+  const zipNorm = input.zip ? input.zip.replace(/\D/g, '') : null;
+
+  const [em, fn, ln, ph, ext, ct, st, ctry, zp] = await Promise.all([
     hashField(input.email),
     hashField(input.firstName),
     hashField(input.lastName),
     hashField(input.phone?.replace(/\D/g, '')),
     hashField(input.externalId),
+    hashField(cityNorm),
+    hashField(stateNorm),
+    hashField(countryNorm),
+    hashField(zipNorm),
   ]);
 
-  if (em)  ud.em          = [em];
-  if (fn)  ud.fn          = [fn];
-  if (ln)  ud.ln          = [ln];
-  if (ph)  ud.ph          = [ph];
-  if (ext) ud.external_id = [ext];
+  if (em)   { ud.em          = [em];   keys.push('em'); }
+  if (fn)   { ud.fn          = [fn];   keys.push('fn'); }
+  if (ln)   { ud.ln          = [ln];   keys.push('ln'); }
+  if (ph)   { ud.ph          = [ph];   keys.push('ph'); }
+  if (ext)  { ud.external_id = [ext];  keys.push('external_id'); }
+  if (ct)   { ud.ct          = [ct];   keys.push('ct'); }
+  if (st)   { ud.st          = [st];   keys.push('st'); }
+  if (ctry) { ud.country     = [ctry]; keys.push('country'); }
+  if (zp)   { ud.zp          = [zp];   keys.push('zp'); }
 
-  if (input.clientIp)  ud.client_ip_address = input.clientIp;
-  if (input.userAgent) ud.client_user_agent = input.userAgent;
-  if (input.fbc)       ud.fbc = input.fbc;
-  if (input.fbp)       ud.fbp = input.fbp;
+  if (input.clientIp)  { ud.client_ip_address = input.clientIp;  keys.push('client_ip_address'); }
+  if (input.userAgent) { ud.client_user_agent = input.userAgent; keys.push('client_user_agent'); }
+  if (input.fbc)       { ud.fbc = input.fbc; keys.push('fbc'); }
+  if (input.fbp)       { ud.fbp = input.fbp; keys.push('fbp'); }
 
-  return ud;
+  return { userData: ud, matchKeys: keys };
 }
 
 /**

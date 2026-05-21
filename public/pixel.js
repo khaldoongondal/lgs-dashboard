@@ -1,7 +1,8 @@
 /**
  * LGS landing-page pixel.
- * Captures fbclid + UTMs + (optionally) ThumbmarkJS fingerprint
- * and posts a PageView event to /api/events.
+ *
+ * Captures fbclid + UTMs + ThumbmarkJS fingerprint + device signals and POSTs
+ * a PageView event to /api/events.
  *
  * Drop into your VSL page just before </body>:
  *
@@ -17,9 +18,12 @@
   'use strict';
 
   var CONFIG = {
-    SERVER_URL: (typeof window !== 'undefined' && window.LGS_SERVER_URL) || '',
+    SERVER_URL:         (typeof window !== 'undefined' && window.LGS_SERVER_URL) || '',
     FBCLID_COOKIE_DAYS: 90,
     UTM_COOKIE_DAYS:    30,
+    // jsDelivr UMD build of @thumbmarkjs/thumbmarkjs — exposes window.ThumbmarkJS
+    THUMBMARK_URL:      'https://cdn.jsdelivr.net/npm/@thumbmarkjs/thumbmarkjs@0.20.5/dist/thumbmark.umd.js',
+    THUMBMARK_TIMEOUT:  2500, // ms — don't block the pageview send forever
   };
 
   // ── UUID v4 ────────────────────────────────────────────────────────────────
@@ -73,15 +77,48 @@
     return out;
   }
 
-  // ── ThumbmarkJS slot (load on demand if available) ─────────────────────────
+  // ── Screen resolution ──────────────────────────────────────────────────────
+  function screenRes() {
+    try {
+      if (!window.screen) return null;
+      return window.screen.width + 'x' + window.screen.height;
+    } catch (_) { return null; }
+  }
+
+  // ── ThumbmarkJS dynamic loader ─────────────────────────────────────────────
+  // Loads the library from a CDN on demand. Resolves with a stable fingerprint
+  // string, or null if the library doesn't load within THUMBMARK_TIMEOUT.
+  // Identity resolution still works via fbclid + email fallback if this fails.
+  function loadThumbmark() {
+    return new Promise(function (resolve) {
+      // Already injected by host page?
+      if (window.ThumbmarkJS && window.ThumbmarkJS.getFingerprint) return resolve(window.ThumbmarkJS);
+      if (window.Thumbmark   && window.Thumbmark.getFingerprint)   return resolve(window.Thumbmark);
+
+      var done = false;
+      var to = setTimeout(function () { if (!done) { done = true; resolve(null); } }, CONFIG.THUMBMARK_TIMEOUT);
+
+      var s = document.createElement('script');
+      s.src   = CONFIG.THUMBMARK_URL;
+      s.async = true;
+      s.onload  = function () {
+        if (done) return;
+        done = true; clearTimeout(to);
+        resolve(window.ThumbmarkJS || window.Thumbmark || null);
+      };
+      s.onerror = function () { if (!done) { done = true; clearTimeout(to); resolve(null); } };
+      document.head.appendChild(s);
+    });
+  }
+
   async function getFingerprint() {
     try {
-      // If you decide to include ThumbmarkJS, expose it on window.Thumbmark
-      // or inline the library; here we just return null in v1.
-      if (window.Thumbmark && window.Thumbmark.getFingerprint) {
-        return await window.Thumbmark.getFingerprint();
-      }
-      return null;
+      var lib = await loadThumbmark();
+      if (!lib || !lib.getFingerprint) return null;
+      var fp = await lib.getFingerprint();
+      // Some builds return an object { thumbmark, ... }; coerce.
+      if (fp && typeof fp === 'object' && fp.thumbmark) return String(fp.thumbmark);
+      return fp ? String(fp) : null;
     } catch (_) { return null; }
   }
 
@@ -120,6 +157,7 @@
       fbc:         buildFbc(fbclid),
       fbp:         getCookie('_fbp') || null,
       user_agent:  navigator.userAgent,
+      screen_res:  screenRes(),
       utm_source:   utms.utm_source   || null,
       utm_medium:   utms.utm_medium   || null,
       utm_campaign: utms.utm_campaign || null,

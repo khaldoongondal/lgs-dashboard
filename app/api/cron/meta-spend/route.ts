@@ -1,5 +1,5 @@
 /**
- * GET /api/cron/meta-spend — daily pull of ad-level insights from Meta.
+ * GET /api/cron/meta-spend — pulls ad-level insights from Meta on a 6h cadence.
  *
  * Auth:
  *   - Vercel cron: includes `Authorization: Bearer ${CRON_SECRET}` automatically
@@ -11,6 +11,11 @@
  *   - since,until  alternative range; pulls inclusive day-by-day
  *
  * Upserts into meta_ad_performance keyed on (date, ad_id). Idempotent.
+ *
+ * Spec: alongside spend/impressions/clicks, we also pull Meta's reported
+ * conversion counts (actions) and video engagement metrics (video_p3_watched,
+ * video_play) — these power the "Meta-reported" columns on the dashboard
+ * shown side-by-side with our calculated numbers.
  */
 import { NextResponse } from 'next/server';
 import { serviceClient } from '@/lib/supabase/server';
@@ -22,24 +27,32 @@ export const maxDuration = 60;
 
 const GRAPH = 'https://graph.facebook.com/v21.0';
 
+interface ActionRow { action_type: string; value: string }
+
 interface InsightRow {
-  date_start:    string;
-  date_stop:     string;
-  account_id:    string;
-  campaign_id:   string;
-  campaign_name?: string;
-  adset_id:      string;
-  adset_name?:   string;
-  ad_id:         string;
-  ad_name?:      string;
-  spend?:        string;
-  impressions?:  string;
-  clicks?:       string;
-  reach?:        string;
-  frequency?:    string;
-  ctr?:          string;
-  cpc?:          string;
-  cpm?:          string;
+  date_start:                  string;
+  date_stop:                   string;
+  account_id:                  string;
+  campaign_id:                 string;
+  campaign_name?:              string;
+  adset_id:                    string;
+  adset_name?:                 string;
+  ad_id:                       string;
+  ad_name?:                    string;
+  spend?:                      string;
+  impressions?:                string;
+  clicks?:                     string;
+  reach?:                      string;
+  frequency?:                  string;
+  ctr?:                        string;
+  cpc?:                        string;
+  cpm?:                        string;
+  cost_per_unique_click?:      string;
+  unique_inline_link_clicks?:  string;
+  unique_outbound_clicks_ctr?: string;
+  cost_per_result?:            { value: string }[] | string;
+  actions?:                    ActionRow[];
+  video_play_actions?:         ActionRow[];
 }
 
 interface AdStatus {
@@ -74,6 +87,50 @@ async function fetchAdStatuses(account: string, token: string): Promise<Map<stri
     }
   }
   return map;
+}
+
+function sumActions(rows: ActionRow[] | undefined): number {
+  if (!rows || rows.length === 0) return 0;
+  return rows.reduce((s, r) => s + (Number(r.value) || 0), 0);
+}
+
+/**
+ * Pull Meta's reported lead count from the `actions` array.
+ * Meta has several lead-flavoured action_types depending on the campaign
+ * objective and pixel setup; "lead" is the canonical one we count.
+ */
+function metaLeads(actions: ActionRow[] | undefined): number {
+  if (!actions) return 0;
+  return actions
+    .filter((a) => a.action_type === 'lead')
+    .reduce((s, a) => s + (Number(a.value) || 0), 0);
+}
+
+function metaPurchases(actions: ActionRow[] | undefined): number {
+  if (!actions) return 0;
+  return actions
+    .filter((a) => a.action_type === 'purchase' || a.action_type === 'omni_purchase')
+    .reduce((s, a) => s + (Number(a.value) || 0), 0);
+}
+
+/**
+ * Meta's "3-second video view" surfaces as action_type=video_view in the
+ * actions array, not as a dedicated insights field. The video_p3_watched_actions
+ * field name is folklore — it doesn't exist in Meta's Marketing API.
+ */
+function video3SecViews(actions: ActionRow[] | undefined): number {
+  if (!actions) return 0;
+  return actions
+    .filter((a) => a.action_type === 'video_view')
+    .reduce((s, a) => s + (Number(a.value) || 0), 0);
+}
+
+/** Meta returns cost_per_result as `[{ value: "12.34", ... }]` or omits it entirely. */
+function firstCostPerResult(raw: InsightRow['cost_per_result']): number | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') return Number(raw) || null;
+  if (Array.isArray(raw) && raw.length > 0) return Number(raw[0].value) || null;
+  return null;
 }
 
 function ymd(d: Date): string {
@@ -123,7 +180,6 @@ export async function GET(req: Request) {
     dates = [ymd(yesterday)];
   }
 
-  // Cap to avoid huge ranges blocking the cron timeout
   if (dates.length > 60) {
     return NextResponse.json({ error: 'range_too_large', max_days: 60 }, { status: 400 });
   }
@@ -131,7 +187,7 @@ export async function GET(req: Request) {
   const sb = serviceClient();
   const summary: Array<{ date: string; rows: number; spend: number; error?: string }> = [];
 
-  // Fetch ad statuses ONCE per cron run — same map applies to all dates in the range.
+  // Fetch ad statuses ONCE per cron run — same map applies to all dates.
   const statusMap = await fetchAdStatuses(account, token);
 
   for (const date of dates) {
@@ -141,6 +197,10 @@ export async function GET(req: Request) {
       'ad_id', 'ad_name',
       'spend', 'impressions', 'clicks', 'reach', 'frequency',
       'ctr', 'cpc', 'cpm',
+      'cost_per_unique_click', 'unique_inline_link_clicks', 'unique_outbound_clicks_ctr',
+      'cost_per_result',
+      'actions',
+      'video_play_actions',
     ].join(',');
 
     const params = new URLSearchParams({
@@ -180,27 +240,42 @@ export async function GET(req: Request) {
       continue;
     }
 
-    const upsertRows = allRows.map((r) => ({
-      date,
-      account_id:    r.account_id || account.replace(/^act_/, ''),
-      campaign_id:   r.campaign_id,
-      campaign_name: r.campaign_name ?? null,
-      adset_id:      r.adset_id,
-      adset_name:    r.adset_name ?? null,
-      ad_id:         r.ad_id,
-      ad_name:       r.ad_name ?? null,
-      spend:         Number(r.spend ?? 0),
-      impressions:   Number(r.impressions ?? 0),
-      clicks:        Number(r.clicks ?? 0),
-      reach:         Number(r.reach ?? 0),
-      frequency:     r.frequency ? Number(r.frequency) : null,
-      ctr:           r.ctr       ? Number(r.ctr)       : null,
-      cpc:           r.cpc       ? Number(r.cpc)       : null,
-      cpm:           r.cpm       ? Number(r.cpm)       : null,
-      // Stash status flags inside raw_payload — attribution query reads from here
-      raw_payload:   { ...r, ...(statusMap.get(r.ad_id) ?? {}) },
-      synced_at:     new Date().toISOString(),
-    }));
+    const upsertRows = allRows.map((r) => {
+      const status = statusMap.get(r.ad_id);
+      return {
+        date,
+        account_id:    r.account_id || account.replace(/^act_/, ''),
+        campaign_id:   r.campaign_id,
+        campaign_name: r.campaign_name ?? null,
+        adset_id:      r.adset_id,
+        adset_name:    r.adset_name ?? null,
+        ad_id:         r.ad_id,
+        ad_name:       r.ad_name ?? null,
+        spend:         Number(r.spend ?? 0),
+        impressions:   Number(r.impressions ?? 0),
+        clicks:        Number(r.clicks ?? 0),
+        reach:         Number(r.reach ?? 0),
+        frequency:     r.frequency ? Number(r.frequency) : null,
+        ctr:           r.ctr       ? Number(r.ctr)       : null,
+        cpc:           r.cpc       ? Number(r.cpc)       : null,
+        cpm:           r.cpm       ? Number(r.cpm)       : null,
+        // New Meta-reported metric columns
+        cost_per_result:            firstCostPerResult(r.cost_per_result),
+        cost_per_unique_click:      r.cost_per_unique_click ? Number(r.cost_per_unique_click) : null,
+        unique_link_clicks:         r.unique_inline_link_clicks ? Number(r.unique_inline_link_clicks) : null,
+        unique_outbound_clicks_ctr: r.unique_outbound_clicks_ctr ? Number(r.unique_outbound_clicks_ctr) : null,
+        video_p3_watched:           video3SecViews(r.actions),
+        video_play_actions:         sumActions(r.video_play_actions),
+        actions:                    r.actions ?? null,
+        meta_leads:                 metaLeads(r.actions),
+        meta_purchases:             metaPurchases(r.actions),
+        // Promote effective_status from raw_payload into a queryable column
+        effective_status:           status?.effective_status ?? null,
+        // Keep raw_payload for diagnostics — every API field is preserved
+        raw_payload:                { ...r, ...(status ?? {}) },
+        synced_at:                  new Date().toISOString(),
+      };
+    });
 
     const totalSpend = upsertRows.reduce((s, r) => s + r.spend, 0);
 

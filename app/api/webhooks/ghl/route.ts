@@ -10,6 +10,14 @@
  * Auth: optional HMAC verification using GHL_WEBHOOK_SECRET. GHL signs
  * outbound webhooks via X-GHL-Signature header. If the secret is unset
  * (dev), we accept all requests and log a warning.
+ *
+ * Identity resolution: spec step 8 — when a contact submits, try three signals
+ * to connect them back to an anonymous page-view session, in priority order:
+ *   1. fbclid       (deterministic; wins unconditionally if present)
+ *   2. fingerprint  (probabilistic; ~90% — ThumbmarkJS)
+ *   3. email        (identity-based; reused only if the contact had prior page views)
+ * On match, we backfill page_view_events.contact_id and inherit fbc/fbp/IP/UA/geo
+ * from the matched session so the CAPI event has maximum EMQ.
  */
 
 import { NextResponse } from 'next/server';
@@ -38,6 +46,112 @@ async function hmacHexSha256(secret: string, message: string): Promise<string> {
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** Subset of page_view_events fields we inherit into the contact + CAPI send. */
+type SessionRow = {
+  id: number;
+  fingerprint: string | null;
+  fbc:         string | null;
+  fbp:         string | null;
+  client_ip:   string | null;
+  user_agent:  string | null;
+  country:     string | null;
+  region:      string | null;
+  city:        string | null;
+  utm_source:   string | null;
+  utm_medium:   string | null;
+  utm_campaign: string | null;
+  utm_content:  string | null;
+  utm_term:     string | null;
+};
+
+const SESSION_FIELDS =
+  'id,fingerprint,fbc,fbp,client_ip,user_agent,country,region,city,' +
+  'utm_source,utm_medium,utm_campaign,utm_content,utm_term';
+
+type ResolutionTier = 'fbclid' | 'fingerprint' | 'email' | null;
+
+/**
+ * 3-tier cascade. Returns the most recent page view that matches the strongest
+ * signal available, plus a label for which tier resolved it.
+ */
+async function resolveAnonymousSession(
+  sb: ReturnType<typeof serviceClient>,
+  signals: { fbclid?: string | null; fingerprint?: string | null; email?: string | null },
+): Promise<{ tier: ResolutionTier; row: SessionRow | null }> {
+  // ── Tier 1: fbclid (deterministic) ───────────────────────────────────
+  if (signals.fbclid) {
+    const { data } = await sb
+      .from('page_view_events')
+      .select(SESSION_FIELDS)
+      .eq('fbclid', signals.fbclid)
+      .order('event_time', { ascending: false })
+      .limit(1);
+    if (data && data.length > 0) return { tier: 'fbclid', row: data[0] as unknown as SessionRow };
+  }
+
+  // ── Tier 2: fingerprint (ThumbmarkJS) ────────────────────────────────
+  if (signals.fingerprint) {
+    const { data } = await sb
+      .from('page_view_events')
+      .select(SESSION_FIELDS)
+      .eq('fingerprint', signals.fingerprint)
+      .order('event_time', { ascending: false })
+      .limit(1);
+    if (data && data.length > 0) return { tier: 'fingerprint', row: data[0] as unknown as SessionRow };
+  }
+
+  // ── Tier 3: email (look up via an existing contact's prior page views) ─
+  if (signals.email) {
+    const { data: existing } = await sb
+      .from('ghl_contacts')
+      .select('id')
+      .eq('email', signals.email)
+      .limit(1);
+    if (existing && existing.length > 0) {
+      const priorContactId = (existing[0] as { id: number }).id;
+      const { data: pv } = await sb
+        .from('page_view_events')
+        .select(SESSION_FIELDS)
+        .eq('contact_id', priorContactId)
+        .order('event_time', { ascending: false })
+        .limit(1);
+      if (pv && pv.length > 0) return { tier: 'email', row: pv[0] as unknown as SessionRow };
+    }
+  }
+
+  return { tier: null, row: null };
+}
+
+/** Backfill page_view_events.contact_id for any rows matching this contact's signals. */
+async function backfillPageViews(
+  sb: ReturnType<typeof serviceClient>,
+  contactRowId: number,
+  signals: { fbclid?: string | null; fingerprint?: string | null },
+): Promise<void> {
+  const updates: Promise<unknown>[] = [];
+  if (signals.fbclid) {
+    updates.push(
+      Promise.resolve(
+        sb.from('page_view_events')
+          .update({ contact_id: contactRowId })
+          .eq('fbclid', signals.fbclid)
+          .is('contact_id', null),
+      ),
+    );
+  }
+  if (signals.fingerprint) {
+    updates.push(
+      Promise.resolve(
+        sb.from('page_view_events')
+          .update({ contact_id: contactRowId })
+          .eq('fingerprint', signals.fingerprint)
+          .is('contact_id', null),
+      ),
+    );
+  }
+  await Promise.all(updates);
+}
+
 export async function POST(req: Request) {
   const url = new URL(req.url);
   const type = url.searchParams.get('type') || '';
@@ -58,7 +172,6 @@ export async function POST(req: Request) {
       req.headers.get('x-ghl-signature') ||
       req.headers.get('x-webhook-signature') || '';
     const expected = await hmacHexSha256(secret, raw);
-    // Tolerate base64-prefixed schemes etc by accepting either case-insensitive equal or prefix-trimmed equal
     const ok = provided.replace(/^sha256=/i, '').toLowerCase() === expected.toLowerCase();
     if (!ok) {
       return NextResponse.json({ error: 'invalid_signature' }, { status: 401 });
@@ -88,17 +201,17 @@ export async function POST(req: Request) {
   const phone     = payload.contact?.phone     ?? payload.phone     ?? null;
   const tags      = payload.contact?.tags      ?? payload.tags      ?? [];
 
-  // Custom fields where we expect the UTMs to live
+  // Custom fields where we expect the UTMs / fbclid / fingerprint to live
   const cf = payload.customFields ?? payload.contact?.customFields ?? {};
-  const utm = {
+  const formUtms = {
     utm_source:   cf.utm_source   ?? payload.utm_source   ?? null,
     utm_medium:   cf.utm_medium   ?? payload.utm_medium   ?? null,
     utm_campaign: cf.utm_campaign ?? payload.utm_campaign ?? null,
     utm_content:  cf.utm_content  ?? payload.utm_content  ?? null,
     utm_term:     cf.utm_term     ?? payload.utm_term     ?? null,
   };
-  const fbclid      = cf.fbclid      ?? payload.fbclid      ?? null;
-  const fingerprint = cf.fingerprint ?? payload.fingerprint ?? null;
+  const formFbclid      = cf.fbclid      ?? payload.fbclid      ?? null;
+  const formFingerprint = cf.fingerprint ?? payload.fingerprint ?? null;
 
   // Appointment / opportunity data
   const appointment = payload.appointment ?? null;
@@ -115,6 +228,33 @@ export async function POST(req: Request) {
 
   const sb = serviceClient();
 
+  // ── Identity Resolution Cascade ──────────────────────────────────────
+  // Look up a prior anonymous page-view session this contact may have had.
+  // Whichever tier wins, we inherit its fbc/fbp/IP/UA/geo into the CAPI send
+  // and (where the form didn't supply them) into the contact record itself.
+  const session = await resolveAnonymousSession(sb, {
+    fbclid:      formFbclid,
+    fingerprint: formFingerprint,
+    email,
+  });
+
+  // Merge UTMs: form values win when present, else inherit from session.
+  const utm = {
+    utm_source:   formUtms.utm_source   ?? session.row?.utm_source   ?? null,
+    utm_medium:   formUtms.utm_medium   ?? session.row?.utm_medium   ?? null,
+    utm_campaign: formUtms.utm_campaign ?? session.row?.utm_campaign ?? null,
+    utm_content:  formUtms.utm_content  ?? session.row?.utm_content  ?? null,
+    utm_term:     formUtms.utm_term     ?? session.row?.utm_term     ?? null,
+  };
+  const resolvedFingerprint = formFingerprint ?? session.row?.fingerprint ?? null;
+  const resolvedFbc         = cf.fbc ?? payload.fbc ?? session.row?.fbc ?? null;
+  const resolvedFbp         = cf.fbp ?? payload.fbp ?? session.row?.fbp ?? null;
+  const resolvedIp          = session.row?.client_ip   ?? null;
+  const resolvedUa          = session.row?.user_agent  ?? null;
+  const resolvedCity        = session.row?.city        ?? null;
+  const resolvedRegion      = session.row?.region      ?? null;
+  const resolvedCountry     = session.row?.country     ?? null;
+
   // Upsert contact
   const contactUpsert = await sb
     .from('ghl_contacts')
@@ -126,8 +266,8 @@ export async function POST(req: Request) {
         last_name:  lastName,
         phone,
         ...utm,
-        fbclid,
-        fingerprint,
+        fbclid:      formFbclid,
+        fingerprint: resolvedFingerprint,
         tags,
         raw_payload: payload,
         updated_at: new Date().toISOString(),
@@ -143,6 +283,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'db_error', detail: contactUpsert.error.message }, { status: 500 });
   }
   const contactRowId = contactUpsert.data?.id as number;
+
+  // Backfill any anonymous page_view_events rows whose fbclid/fingerprint
+  // matches this contact — links the historical session to the now-known person.
+  await backfillPageViews(sb, contactRowId, {
+    fbclid:      formFbclid,
+    fingerprint: resolvedFingerprint,
+  });
 
   // Insert pipeline event
   const eventId = `ghl_${eventName}_${contactId}_${appointment?.id ?? opportunity?.id ?? Date.parse(eventTime)}`;
@@ -173,7 +320,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'db_error', detail: evIns.error.message }, { status: 500 });
   }
 
-  // Forward to Meta CAPI
+  // Forward to Meta CAPI — pull in every signal we have for max EMQ.
   const capi = await sendCapiEvent({
     eventName,
     eventId,
@@ -181,9 +328,14 @@ export async function POST(req: Request) {
     eventSourceUrl: payload.source_url ?? undefined,
     user: {
       email, firstName, lastName, phone,
-      fbc: cf.fbc ?? payload.fbc ?? undefined,
-      fbp: cf.fbp ?? payload.fbp ?? undefined,
-      externalId: fingerprint ?? undefined,
+      fbc:        resolvedFbc        ?? undefined,
+      fbp:        resolvedFbp        ?? undefined,
+      externalId: resolvedFingerprint ?? undefined,
+      clientIp:   resolvedIp         ?? undefined,
+      userAgent:  resolvedUa         ?? undefined,
+      city:       resolvedCity       ?? undefined,
+      state:      resolvedRegion     ?? undefined,
+      country:    resolvedCountry    ?? undefined,
     },
     value:    eventName === 'Purchase' ? dealValue : undefined,
     currency: opportunity?.currency ?? 'CAD',
@@ -192,5 +344,9 @@ export async function POST(req: Request) {
     source:    'ghl_webhook',
   });
 
-  return NextResponse.json({ ok: true, capi_sent: capi.ok });
+  return NextResponse.json({
+    ok: true,
+    capi_sent:  capi.ok,
+    resolution: session.tier,   // which tier matched (or null)
+  });
 }

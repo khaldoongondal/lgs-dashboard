@@ -23,6 +23,7 @@ _reference-evernude/
 # Local-only files (Claude Code config + planning docs)
 .claude/
 Claude Conversation.docx
+docs/
 
 # SSH keys must never be tracked (defense in depth — they should live in ~/.ssh)
 id_ed25519*

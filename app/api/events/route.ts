@@ -3,9 +3,16 @@
  *
  * Stores a page_view_events row (and forwards a ViewContent to Meta CAPI
  * when the pixel is configured). Idempotent on event_id.
+ *
+ * Per spec: alongside the UTM/fbclid/fingerprint signals, we also store
+ *   - device_type / browser / os parsed from the user agent
+ *   - screen_res from the pixel payload
+ *   - country / region / city from Vercel's geo headers (when on Vercel)
+ * so identity resolution and EMQ both have richer signals to work with.
  */
 
 import { NextResponse } from 'next/server';
+import { UAParser } from 'ua-parser-js';
 import { serviceClient } from '@/lib/supabase/server';
 import { sendCapiEvent } from '@/lib/meta-capi';
 import { buildFbc } from '@/lib/hash';
@@ -14,6 +21,47 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 const ALLOWED_EVENTS = new Set(['PageView', 'ContentView', 'AddToCart', 'InitiateCheckout']);
+
+interface UaSignals {
+  device_type: string | null;
+  browser:     string | null;
+  os:          string | null;
+}
+
+function parseUa(ua: string | null): UaSignals {
+  if (!ua) return { device_type: null, browser: null, os: null };
+  try {
+    const r = new UAParser(ua).getResult();
+    return {
+      device_type: r.device.type || 'desktop',   // ua-parser-js returns undefined for desktop
+      browser:     r.browser.name || null,
+      os:          r.os.name || null,
+    };
+  } catch {
+    return { device_type: null, browser: null, os: null };
+  }
+}
+
+interface Geo {
+  country: string | null;
+  region:  string | null;
+  city:    string | null;
+}
+
+function readGeo(req: Request): Geo {
+  // Vercel injects geo headers on every request; locally these are absent.
+  // Header reference: https://vercel.com/docs/edge-network/headers/request-headers
+  const h = req.headers;
+  const country = h.get('x-vercel-ip-country') || null;
+  const region  = h.get('x-vercel-ip-country-region') || null;
+  // x-vercel-ip-city is URL-encoded (e.g. "San%20Francisco")
+  const cityRaw = h.get('x-vercel-ip-city');
+  let city: string | null = null;
+  if (cityRaw) {
+    try { city = decodeURIComponent(cityRaw); } catch { city = cityRaw; }
+  }
+  return { country, region, city };
+}
 
 export async function POST(req: Request) {
   let body: any;
@@ -28,7 +76,7 @@ export async function POST(req: Request) {
     page_url, referrer,
     fingerprint, fbclid, fbp, fbc: rawFbc,
     utm_source, utm_medium, utm_campaign, utm_content, utm_term,
-    user_agent,
+    user_agent, screen_res,
   } = body ?? {};
 
   if (!event_id) {
@@ -42,6 +90,9 @@ export async function POST(req: Request) {
   const ua = user_agent || req.headers.get('user-agent') || null;
   const eventTimeMs = event_time ? Number(event_time) * 1000 : Date.now();
   const fbc = rawFbc || buildFbc(fbclid, eventTimeMs);
+
+  const uaSignals = parseUa(ua);
+  const geo       = readGeo(req);
 
   try {
     const sb = serviceClient();
@@ -60,6 +111,13 @@ export async function POST(req: Request) {
         utm_source, utm_medium, utm_campaign, utm_content, utm_term,
         client_ip: clientIp,
         user_agent: ua,
+        device_type: uaSignals.device_type,
+        browser:     uaSignals.browser,
+        os:          uaSignals.os,
+        screen_res:  screen_res ?? null,
+        country:     geo.country,
+        region:      geo.region,
+        city:        geo.city,
       }],
       { onConflict: 'event_id', ignoreDuplicates: true }
     ).select('id');
@@ -81,6 +139,9 @@ export async function POST(req: Request) {
         fbc:         fbc ?? undefined,
         fbp:         fbp ?? undefined,
         externalId:  fingerprint ?? undefined,
+        country:     geo.country ?? undefined,
+        city:        geo.city ?? undefined,
+        state:       geo.region ?? undefined,
       },
       source: 'pixel',
     }).catch(() => {});

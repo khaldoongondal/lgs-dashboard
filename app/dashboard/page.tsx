@@ -4,7 +4,7 @@ import EmptyState from '@/components/empty-state';
 import { resolveRange } from '@/lib/date-range';
 import {
   aggregateAttribution, totalsRow,
-  type DrillLevel, type AttributionFilter,
+  type DrillLevel, type AttributionFilter, type AttributionRow,
 } from '@/lib/queries/attribution';
 import { fmtCurrency, fmtNumber } from '@/lib/format';
 import Link from 'next/link';
@@ -20,17 +20,23 @@ const LEVELS: { value: DrillLevel; label: string; singular: string }[] = [
   { value: 'ad',       label: 'Ads',       singular: 'Ad'       },
 ];
 
-// What level to advance to when the user clicks a row at the current level.
-// Hierarchy: source → campaign → adset → ad
 const NEXT_LEVEL: Partial<Record<DrillLevel, DrillLevel>> = {
   source:   'campaign',
   campaign: 'adset',
   adset:    'ad',
 };
 
+type View = 'funnel' | 'meta' | 'creative';
+const VIEWS: { value: View; label: string }[] = [
+  { value: 'funnel',   label: 'Funnel'        },
+  { value: 'meta',     label: 'Meta-Reported' },
+  { value: 'creative', label: 'Creative'      },
+];
+
 interface SP {
   preset?: string; from?: string; to?: string;
   level?: DrillLevel;
+  view?:  View;
   source?: string; campaign?: string; adset?: string;
   active?: string;
 }
@@ -43,6 +49,16 @@ function buildHref(base: Partial<SP>): string {
   return `/dashboard?${sp.toString()}`;
 }
 
+function fmtPct(v: number | null | undefined, digits = 2): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return `${(v * 100).toFixed(digits)}%`;
+}
+
+function fmtPctAbs(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return `${v.toFixed(digits)}%`;
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -50,6 +66,7 @@ export default async function DashboardPage({
 }) {
   const range = resolveRange(searchParams);
   const level: DrillLevel = (searchParams.level as DrillLevel) || 'source';
+  const view:  View       = (searchParams.view  as View)       || 'funnel';
   const filter: AttributionFilter = {
     source:   searchParams.source,
     campaign: searchParams.campaign,
@@ -64,10 +81,10 @@ export default async function DashboardPage({
     preset: range.preset,
     from:   range.from,
     to:     range.to,
+    view,
     ...(filter.active ? { active: '1' } : {}),
   };
 
-  // Breadcrumb segments: Home → (Source) → (Campaign) → (Adset)
   type Crumb = { label: string; href: string };
   const crumbs: Crumb[] = [
     { label: 'All', href: buildHref({ ...baseParams, level: 'source' }) },
@@ -108,8 +125,8 @@ export default async function DashboardPage({
     <PageShell current="/dashboard" title="Ad Attribution"
       subtitle={`${range.from} → ${range.to}`} range={range}>
 
-      {/* KPI cards */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {/* Funnel KPIs */}
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <StatCard label="Ad Spend"   value={fmtCurrency(total.spend)} />
         <StatCard label="Page Views" value={fmtNumber(total.page_views)} />
         <StatCard label="Leads"      value={fmtNumber(total.leads)}
@@ -118,14 +135,32 @@ export default async function DashboardPage({
                   hint={total.cac != null ? `CAC ${fmtCurrency(total.cac)}` : undefined} />
       </section>
 
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <StatCard label="Booked"  value={fmtNumber(total.booked)}
                   hint={total.cost_booked != null ? `Cost/Booked ${fmtCurrency(total.cost_booked)}` : undefined} />
         <StatCard label="Shown"   value={fmtNumber(total.shown)}
                   hint={total.cost_shown != null ? `Cost/Shown ${fmtCurrency(total.cost_shown)}` : undefined} />
-        <StatCard label="Revenue" value={fmtCurrency(total.revenue)} />
+        <StatCard label="Revenue" value={fmtCurrency(total.revenue)}
+                  hint={total.roi_pct != null ? `ROI ${fmtPctAbs(total.roi_pct)}` : undefined} />
         <StatCard label="ROAS"    value={total.roas != null ? `${total.roas.toFixed(2)}x` : '—'}
                   accent={total.roas != null && total.roas >= 2 ? 'success' : 'default'} />
+      </section>
+
+      {/* Meta-Reported KPIs — what Meta says vs what we measured. */}
+      <section className="mb-6">
+        <div className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">
+          Meta Reported
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <StatCard label="Impressions" value={fmtNumber(total.impressions)}
+                    hint={total.ctr != null ? `CTR ${fmtPct(total.ctr)}` : undefined} />
+          <StatCard label="Meta Leads"  value={fmtNumber(total.meta_leads)}
+                    hint={total.meta_cpl != null ? `Meta CPL ${fmtCurrency(total.meta_cpl)}` : undefined} />
+          <StatCard label="Hook Rate"   value={fmtPct(total.hook_rate, 1)}
+                    hint={`${fmtNumber(total.video_p3_watched)} 3-sec`} />
+          <StatCard label="Video Plays" value={fmtNumber(total.video_play_actions)}
+                    hint={total.video_play_rate != null ? `Play Rate ${fmtPct(total.video_play_rate, 1)}` : undefined} />
+        </div>
       </section>
 
       {/* Breadcrumb */}
@@ -144,7 +179,7 @@ export default async function DashboardPage({
         </nav>
       )}
 
-      {/* Drill tabs + Active toggle */}
+      {/* Drill tabs + View tabs + Active toggle */}
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <div className="flex items-center gap-1">
           <span className="text-xs font-medium uppercase tracking-wide text-slate-500 mr-2">
@@ -184,6 +219,32 @@ export default async function DashboardPage({
         </Link>
       </div>
 
+      <div className="flex items-center gap-1 mb-3">
+        <span className="text-xs font-medium uppercase tracking-wide text-slate-500 mr-2">
+          View
+        </span>
+        {VIEWS.map((v) => {
+          const active = view === v.value;
+          return (
+            <Link
+              key={v.value}
+              href={buildHref({
+                ...baseParams,
+                view: v.value,
+                level,
+                source: filter.source, campaign: filter.campaign, adset: filter.adset,
+              })}
+              className={[
+                'px-3 py-1.5 rounded-lg text-xs font-medium',
+                active ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
+              ].join(' ')}
+            >
+              {v.label}
+            </Link>
+          );
+        })}
+      </div>
+
       {/* Drill table */}
       <div className="card overflow-x-auto">
         {rows.length === 0 ? (
@@ -192,87 +253,189 @@ export default async function DashboardPage({
             description="Try a wider date range, clear filters, or turn off the active-only toggle."
           />
         ) : (
-          <table className="lgs-table">
-            <thead>
-              <tr>
-                <th className="!text-left">{LEVELS.find((l) => l.value === level)?.singular}</th>
-                {level !== 'source' && level !== 'medium' && (
-                  <th className="!text-left">Status</th>
-                )}
-                <th className="!text-right">Spend</th>
-                <th className="!text-right">Page Views</th>
-                <th className="!text-right">Leads</th>
-                <th className="!text-right">CPL</th>
-                <th className="!text-right">Booked</th>
-                <th className="!text-right">Shown</th>
-                <th className="!text-right">Closes</th>
-                <th className="!text-right">CAC</th>
-                <th className="!text-right">Revenue</th>
-                <th className="!text-right">ROAS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const nextLevel = NEXT_LEVEL[level];
-                const canDrillDeeper = !!nextLevel;
-                const drillHref = canDrillDeeper ? buildHref({
-                  ...baseParams,
-                  level: nextLevel,
-                  source:   level === 'source'   ? r.label : filter.source,
-                  campaign: level === 'campaign' ? r.label : filter.campaign,
-                  adset:    level === 'adset'    ? r.label : filter.adset,
-                }) : null;
-
-                const labelCell = drillHref ? (
-                  <Link href={drillHref} className="text-indigo-600 hover:underline">{r.label}</Link>
-                ) : (
-                  <span>{r.label}</span>
-                );
-
-                return (
-                  <tr key={r.key}>
-                    <td className="font-medium text-slate-900">{labelCell}</td>
-                    {level !== 'source' && level !== 'medium' && (
-                      <td className="text-left">
-                        <StatusPill status={r.status} />
-                      </td>
-                    )}
-                    <td className="text-right tabular-nums">{fmtCurrency(r.spend)}</td>
-                    <td className="text-right tabular-nums">{fmtNumber(r.page_views)}</td>
-                    <td className="text-right tabular-nums">{fmtNumber(r.leads)}</td>
-                    <td className="text-right tabular-nums">{r.cpl != null ? fmtCurrency(r.cpl) : '—'}</td>
-                    <td className="text-right tabular-nums">{fmtNumber(r.booked)}</td>
-                    <td className="text-right tabular-nums">{fmtNumber(r.shown)}</td>
-                    <td className="text-right tabular-nums">{fmtNumber(r.closes)}</td>
-                    <td className="text-right tabular-nums">{r.cac != null ? fmtCurrency(r.cac) : '—'}</td>
-                    <td className="text-right tabular-nums">{fmtCurrency(r.revenue)}</td>
-                    <td className="text-right tabular-nums">
-                      {r.roas != null ? `${r.roas.toFixed(2)}x` : '—'}
-                    </td>
-                  </tr>
-                );
-              })}
-              <tr className="summary">
-                <td>Total</td>
-                {level !== 'source' && level !== 'medium' && <td />}
-                <td className="text-right tabular-nums">{fmtCurrency(total.spend)}</td>
-                <td className="text-right tabular-nums">{fmtNumber(total.page_views)}</td>
-                <td className="text-right tabular-nums">{fmtNumber(total.leads)}</td>
-                <td className="text-right tabular-nums">{total.cpl != null ? fmtCurrency(total.cpl) : '—'}</td>
-                <td className="text-right tabular-nums">{fmtNumber(total.booked)}</td>
-                <td className="text-right tabular-nums">{fmtNumber(total.shown)}</td>
-                <td className="text-right tabular-nums">{fmtNumber(total.closes)}</td>
-                <td className="text-right tabular-nums">{total.cac != null ? fmtCurrency(total.cac) : '—'}</td>
-                <td className="text-right tabular-nums">{fmtCurrency(total.revenue)}</td>
-                <td className="text-right tabular-nums">
-                  {total.roas != null ? `${total.roas.toFixed(2)}x` : '—'}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <DrillTable
+            rows={rows}
+            total={total}
+            level={level}
+            view={view}
+            filter={filter}
+            baseParams={baseParams}
+          />
         )}
       </div>
     </PageShell>
+  );
+}
+
+// ── Drill table — column set varies by view ─────────────────────────
+function DrillTable({
+  rows, total, level, view, filter, baseParams,
+}: {
+  rows: AttributionRow[];
+  total: AttributionRow;
+  level: DrillLevel;
+  view: View;
+  filter: AttributionFilter;
+  baseParams: Partial<SP>;
+}) {
+  const showStatus = level !== 'source' && level !== 'medium';
+  const singular = LEVELS.find((l) => l.value === level)?.singular;
+
+  return (
+    <table className="lgs-table">
+      <thead>
+        <tr>
+          <th className="!text-left">{singular}</th>
+          {showStatus && <th className="!text-left">Status</th>}
+          {view === 'funnel' && (
+            <>
+              <th className="!text-right">Spend</th>
+              <th className="!text-right">Page Views</th>
+              <th className="!text-right">Leads</th>
+              <th className="!text-right">CPL</th>
+              <th className="!text-right">Booked</th>
+              <th className="!text-right">Unique Booked</th>
+              <th className="!text-right">Shown</th>
+              <th className="!text-right">Closes</th>
+              <th className="!text-right">CAC</th>
+              <th className="!text-right">Revenue</th>
+              <th className="!text-right">ROAS</th>
+              <th className="!text-right">ROI %</th>
+            </>
+          )}
+          {view === 'meta' && (
+            <>
+              <th className="!text-right">Spend</th>
+              <th className="!text-right">Impressions</th>
+              <th className="!text-right">Reach</th>
+              <th className="!text-right">Clicks</th>
+              <th className="!text-right">CTR</th>
+              <th className="!text-right">CPM</th>
+              <th className="!text-right">CPC</th>
+              <th className="!text-right">Meta Leads</th>
+              <th className="!text-right">Meta CPL</th>
+              <th className="!text-right">Our CPL</th>
+              <th className="!text-right">Meta Purch.</th>
+            </>
+          )}
+          {view === 'creative' && (
+            <>
+              <th className="!text-right">Spend</th>
+              <th className="!text-right">Impressions</th>
+              <th className="!text-right">3-Sec Plays</th>
+              <th className="!text-right">Hook Rate</th>
+              <th className="!text-right">Video Plays</th>
+              <th className="!text-right">Play Rate</th>
+              <th className="!text-right">Link Clicks</th>
+              <th className="!text-right">Cost/Link Click</th>
+            </>
+          )}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => {
+          const nextLevel = NEXT_LEVEL[level];
+          const drillHref = nextLevel ? buildHref({
+            ...baseParams,
+            level: nextLevel,
+            source:   level === 'source'   ? r.label : filter.source,
+            campaign: level === 'campaign' ? r.label : filter.campaign,
+            adset:    level === 'adset'    ? r.label : filter.adset,
+          }) : null;
+
+          const labelCell = drillHref ? (
+            <Link href={drillHref} className="text-indigo-600 hover:underline">{r.label}</Link>
+          ) : (
+            <span>{r.label}</span>
+          );
+
+          return (
+            <tr key={r.key}>
+              <td className="font-medium text-slate-900">{labelCell}</td>
+              {showStatus && (
+                <td className="text-left">
+                  <StatusPill status={r.status} />
+                </td>
+              )}
+              {view === 'funnel' && <FunnelCells r={r} />}
+              {view === 'meta'   && <MetaCells   r={r} />}
+              {view === 'creative' && <CreativeCells r={r} />}
+            </tr>
+          );
+        })}
+        <tr className="summary">
+          <td>Total</td>
+          {showStatus && <td />}
+          {view === 'funnel' && <FunnelCells r={total} />}
+          {view === 'meta'   && <MetaCells   r={total} />}
+          {view === 'creative' && <CreativeCells r={total} />}
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function num(n: number)             { return <td className="text-right tabular-nums">{fmtNumber(n)}</td>; }
+function cur(n: number)             { return <td className="text-right tabular-nums">{fmtCurrency(n)}</td>; }
+function curOrDash(n: number | null | undefined) {
+  return <td className="text-right tabular-nums">{n != null ? fmtCurrency(n) : '—'}</td>;
+}
+function pct(n: number | null | undefined, digits = 2) {
+  return <td className="text-right tabular-nums">{fmtPct(n, digits)}</td>;
+}
+function pctAbs(n: number | null | undefined, digits = 1) {
+  return <td className="text-right tabular-nums">{fmtPctAbs(n, digits)}</td>;
+}
+
+function FunnelCells({ r }: { r: AttributionRow }) {
+  return (
+    <>
+      {cur(r.spend)}
+      {num(r.page_views)}
+      {num(r.leads)}
+      {curOrDash(r.cpl)}
+      {num(r.booked)}
+      {num(r.unique_booked)}
+      {num(r.shown)}
+      {num(r.closes)}
+      {curOrDash(r.cac)}
+      {cur(r.revenue)}
+      <td className="text-right tabular-nums">{r.roas != null ? `${r.roas.toFixed(2)}x` : '—'}</td>
+      {pctAbs(r.roi_pct)}
+    </>
+  );
+}
+
+function MetaCells({ r }: { r: AttributionRow }) {
+  return (
+    <>
+      {cur(r.spend)}
+      {num(r.impressions)}
+      {num(r.reach)}
+      {num(r.clicks)}
+      {pct(r.ctr)}
+      {curOrDash(r.cpm)}
+      {curOrDash(r.cpc)}
+      {num(r.meta_leads)}
+      {curOrDash(r.meta_cpl)}
+      {curOrDash(r.cpl)}
+      {num(r.meta_purchases)}
+    </>
+  );
+}
+
+function CreativeCells({ r }: { r: AttributionRow }) {
+  return (
+    <>
+      {cur(r.spend)}
+      {num(r.impressions)}
+      {num(r.video_p3_watched)}
+      {pct(r.hook_rate, 1)}
+      {num(r.video_play_actions)}
+      {pct(r.video_play_rate, 1)}
+      {num(r.unique_link_clicks)}
+      {curOrDash(r.cost_per_link_click)}
+    </>
   );
 }
 
