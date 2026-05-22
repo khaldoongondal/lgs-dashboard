@@ -1,14 +1,20 @@
 /**
  * POST /api/events — receives events from the browser pixel.
  *
- * Stores a page_view_events row (and forwards a ViewContent to Meta CAPI
- * when the pixel is configured). Idempotent on event_id.
+ * Accepts five event types:
+ *   PageView    — any funnel page load (also fires Meta CAPI ViewContent)
+ *   CTAClick    — VSL call-to-action button click
+ *   OptIn       — form submit confirmed client-side
+ *   Booking     — booking-confirmed signal from the thank-you page
+ *   ContentView — generic
  *
- * Per spec: alongside the UTM/fbclid/fingerprint signals, we also store
- *   - device_type / browser / os parsed from the user agent
- *   - screen_res from the pixel payload
- *   - country / region / city from Vercel's geo headers (when on Vercel)
- * so identity resolution and EMQ both have richer signals to work with.
+ * Stores rows into page_view_events keyed on event_id (idempotent). CTA / OptIn
+ * / Booking events do NOT fire Meta CAPI — those are authoritative through GHL
+ * webhooks, which run with hashed PII for max EMQ. Pixel-side events are for
+ * funnel-conversion analytics only.
+ *
+ * Persists: UA-parsed device/browser/os, Vercel geo (country/region/city),
+ * screen_res from payload, and page_slug (vsl | optin | booking | thankyou).
  */
 
 import { NextResponse } from 'next/server';
@@ -20,7 +26,16 @@ import { buildFbc } from '@/lib/hash';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const ALLOWED_EVENTS = new Set(['PageView', 'ContentView', 'AddToCart', 'InitiateCheckout']);
+const ALLOWED_EVENTS = new Set([
+  'PageView', 'ContentView',
+  'CTAClick', 'OptIn', 'Booking',
+  'AddToCart', 'InitiateCheckout',
+]);
+
+// Only these fire Meta CAPI ViewContent. Funnel-internal events (CTA/OptIn/
+// Booking) stay client-side; GHL webhooks are authoritative for Lead/Schedule
+// and run with hashed PII (much higher EMQ than what a browser can send).
+const CAPI_EVENTS = new Set(['PageView', 'ContentView']);
 
 interface UaSignals {
   device_type: string | null;
@@ -33,7 +48,7 @@ function parseUa(ua: string | null): UaSignals {
   try {
     const r = new UAParser(ua).getResult();
     return {
-      device_type: r.device.type || 'desktop',   // ua-parser-js returns undefined for desktop
+      device_type: r.device.type || 'desktop',
       browser:     r.browser.name || null,
       os:          r.os.name || null,
     };
@@ -42,19 +57,12 @@ function parseUa(ua: string | null): UaSignals {
   }
 }
 
-interface Geo {
-  country: string | null;
-  region:  string | null;
-  city:    string | null;
-}
+interface Geo { country: string | null; region: string | null; city: string | null }
 
 function readGeo(req: Request): Geo {
-  // Vercel injects geo headers on every request; locally these are absent.
-  // Header reference: https://vercel.com/docs/edge-network/headers/request-headers
   const h = req.headers;
   const country = h.get('x-vercel-ip-country') || null;
   const region  = h.get('x-vercel-ip-country-region') || null;
-  // x-vercel-ip-city is URL-encoded (e.g. "San%20Francisco")
   const cityRaw = h.get('x-vercel-ip-city');
   let city: string | null = null;
   if (cityRaw) {
@@ -73,7 +81,7 @@ export async function POST(req: Request) {
 
   const {
     event_id, event_name = 'PageView', event_time,
-    page_url, referrer,
+    page_url, page_slug, referrer,
     fingerprint, fbclid, fbp, fbc: rawFbc,
     utm_source, utm_medium, utm_campaign, utm_content, utm_term,
     user_agent, screen_res,
@@ -103,6 +111,7 @@ export async function POST(req: Request) {
         event_name,
         event_time:  new Date(eventTimeMs).toISOString(),
         page_url,
+        page_slug:   page_slug ?? null,
         referrer,
         fingerprint,
         fbclid,
@@ -127,24 +136,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'db_error' }, { status: 500 });
     }
 
-    // Fire-and-forget CAPI ViewContent
-    sendCapiEvent({
-      eventName:      'PageView',
-      eventId:        event_id,
-      eventTimeUnix:  Math.floor(eventTimeMs / 1000),
-      eventSourceUrl: page_url,
-      user: {
-        clientIp:    clientIp ?? undefined,
-        userAgent:   ua ?? undefined,
-        fbc:         fbc ?? undefined,
-        fbp:         fbp ?? undefined,
-        externalId:  fingerprint ?? undefined,
-        country:     geo.country ?? undefined,
-        city:        geo.city ?? undefined,
-        state:       geo.region ?? undefined,
-      },
-      source: 'pixel',
-    }).catch(() => {});
+    // Fire Meta CAPI ViewContent for page-views only (skip funnel-internal events)
+    if (CAPI_EVENTS.has(event_name)) {
+      sendCapiEvent({
+        eventName:      'PageView',
+        eventId:        event_id,
+        eventTimeUnix:  Math.floor(eventTimeMs / 1000),
+        eventSourceUrl: page_url,
+        user: {
+          clientIp:    clientIp ?? undefined,
+          userAgent:   ua ?? undefined,
+          fbc:         fbc ?? undefined,
+          fbp:         fbp ?? undefined,
+          externalId:  fingerprint ?? undefined,
+          country:     geo.country ?? undefined,
+          city:        geo.city ?? undefined,
+          state:       geo.region ?? undefined,
+        },
+        source: 'pixel',
+      }).catch(() => {});
+    }
 
     return NextResponse.json({ ok: true });
   } catch (err) {

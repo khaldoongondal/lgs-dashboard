@@ -31,6 +31,9 @@ export interface AttributionFilter {
 export interface AttributionRow {
   key:        string;
   label:      string;
+  /** Creative preview — populated only when drill level = 'ad'. */
+  thumbnail_url?: string | null;
+  permalink_url?: string | null;
 
   // ── Our calculated metrics ─────────────────────────────────
   spend:      number;
@@ -132,11 +135,15 @@ export async function aggregateAttribution(
 
   const toEnd = `${toISO}T23:59:59.999Z`;
 
-  const [spendRes, pvRes, evRes, contactsRes] = await Promise.all([
+  const [spendRes, pvRes, evRes, contactsRes, creativesRes] = await Promise.all([
     sb.from('meta_ad_performance').select('*').gte('date', fromISO).lte('date', toISO),
     sb.from('page_view_events').select('*').gte('event_time', fromISO).lte('event_time', toEnd),
     sb.from('ghl_pipeline_events').select('*').gte('event_time', fromISO).lte('event_time', toEnd),
     sb.from('ghl_contacts').select('id,utm_source,utm_medium,utm_campaign,utm_content,utm_term'),
+    // Only loaded when we're drilled to ad level — saves a fetch otherwise.
+    level === 'ad'
+      ? sb.from('ad_creatives').select('ad_name, thumbnail_url, permalink_url')
+      : Promise.resolve({ data: [] as any[], error: null as any }),
   ]);
 
   if (spendRes.error || pvRes.error || evRes.error || contactsRes.error) {
@@ -144,6 +151,13 @@ export async function aggregateAttribution(
       spendRes.error?.message, pvRes.error?.message,
       evRes.error?.message,    contactsRes.error?.message);
     return [];
+  }
+
+  // ad_name → creative URLs (only when level === 'ad')
+  const creativeByName = new Map<string, { thumbnail_url: string | null; permalink_url: string | null }>();
+  for (const c of creativesRes.data ?? []) {
+    const cc = c as any;
+    if (cc.ad_name) creativeByName.set(cc.ad_name, { thumbnail_url: cc.thumbnail_url, permalink_url: cc.permalink_url });
   }
 
   // contact_id → contact's UTMs
@@ -257,25 +271,30 @@ export async function aggregateAttribution(
     if (b) b.unique_booked = set.size;
   }
 
-  const out = Array.from(bucketsMap.values()).map((b) => ({
-    ...b,
-    // funnel-derived
-    cpl:         b.leads  > 0 ? b.spend / b.leads  : null,
-    cost_booked: b.booked > 0 ? b.spend / b.booked : null,
-    cost_shown:  b.shown  > 0 ? b.spend / b.shown  : null,
-    cac:         b.closes > 0 ? b.spend / b.closes : null,
-    roas:        b.spend  > 0 ? b.revenue / b.spend : null,
-    roi_pct:     b.spend  > 0 ? ((b.revenue - b.spend) / b.spend) * 100 : null,
+  const out = Array.from(bucketsMap.values()).map((b) => {
+    const creative = level === 'ad' ? creativeByName.get(b.label) : undefined;
+    return {
+      ...b,
+      thumbnail_url: creative?.thumbnail_url ?? null,
+      permalink_url: creative?.permalink_url ?? null,
+      // funnel-derived
+      cpl:         b.leads  > 0 ? b.spend / b.leads  : null,
+      cost_booked: b.booked > 0 ? b.spend / b.booked : null,
+      cost_shown:  b.shown  > 0 ? b.spend / b.shown  : null,
+      cac:         b.closes > 0 ? b.spend / b.closes : null,
+      roas:        b.spend  > 0 ? b.revenue / b.spend : null,
+      roi_pct:     b.spend  > 0 ? ((b.revenue - b.spend) / b.spend) * 100 : null,
 
-    // Meta-derived (recomputed from summed totals)
-    ctr:                 b.impressions > 0 ? b.clicks / b.impressions : null,
-    cpc:                 b.clicks > 0      ? b.spend  / b.clicks      : null,
-    cpm:                 b.impressions > 0 ? (b.spend / b.impressions) * 1000 : null,
-    hook_rate:           b.impressions > 0 ? b.video_p3_watched   / b.impressions : null,
-    video_play_rate:     b.impressions > 0 ? b.video_play_actions / b.impressions : null,
-    meta_cpl:            b.meta_leads > 0        ? b.spend / b.meta_leads        : null,
-    cost_per_link_click: b.unique_link_clicks > 0 ? b.spend / b.unique_link_clicks : null,
-  }));
+      // Meta-derived (recomputed from summed totals)
+      ctr:                 b.impressions > 0 ? b.clicks / b.impressions : null,
+      cpc:                 b.clicks > 0      ? b.spend  / b.clicks      : null,
+      cpm:                 b.impressions > 0 ? (b.spend / b.impressions) * 1000 : null,
+      hook_rate:           b.impressions > 0 ? b.video_p3_watched   / b.impressions : null,
+      video_play_rate:     b.impressions > 0 ? b.video_play_actions / b.impressions : null,
+      meta_cpl:            b.meta_leads > 0        ? b.spend / b.meta_leads        : null,
+      cost_per_link_click: b.unique_link_clicks > 0 ? b.spend / b.unique_link_clicks : null,
+    };
+  });
 
   out.sort((a, b) => b.spend - a.spend);
   return out;

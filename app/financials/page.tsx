@@ -2,7 +2,7 @@ import PageShell from '@/components/page-shell';
 import StatCard from '@/components/stat-card';
 import EmptyState from '@/components/empty-state';
 import { resolveRange } from '@/lib/date-range';
-import { loadMonthlySnapshots, loadClientCounts } from '@/lib/queries/financials';
+import { loadMonthlySnapshots, loadClientCounts, deriveCurrentSnapshot } from '@/lib/queries/financials';
 import { fmtCurrency, fmtNumber, fmtPct } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
@@ -14,12 +14,15 @@ export default async function FinancialsPage({
   searchParams: { preset?: string; from?: string; to?: string };
 }) {
   const range = resolveRange(searchParams);
-  const [snapshots, counts] = await Promise.all([
+  const [snapshots, counts, live] = await Promise.all([
     loadMonthlySnapshots(range.from, range.to),
     loadClientCounts(),
+    deriveCurrentSnapshot(range.from, range.to),
   ]);
 
-  const latest = snapshots[0];
+  // Prefer the latest persisted snapshot; fall back to a live-derived one so
+  // the headline cards never show empty before the monthly cron has run.
+  const latest = snapshots[0] ?? live;
 
   return (
     <PageShell current="/financials" title="Financials"
@@ -111,12 +114,12 @@ export default async function FinancialsPage({
       </div>
 
       <div className="card-pad">
-        <div className="text-sm font-medium text-slate-900">AI modeling</div>
+        <div className="text-sm font-medium text-slate-900">Backfill / refresh snapshots</div>
         <p className="mt-1 text-sm text-slate-500">
-          Projections / scenarios / anomaly detection plug in here. Wire the Anthropic API key
-          and a <code>/api/ai/*</code> endpoint to start using historical KPIs for forecasts.
+          Snapshot rows are computed from clients + meta_ad_performance + sales_metrics + expense_config.
+          Trigger <code>/api/cron/monthly-snapshot?month=YYYY-MM&amp;secret=...</code> to write or
+          refresh a specific month. Use <code>?since=&amp;until=</code> for backfills (max 36 months).
         </p>
-        <button className="btn-secondary mt-3" disabled>Run projection (coming soon)</button>
       </div>
     </PageShell>
   );

@@ -38,8 +38,14 @@ export const env = {
   ghlLocationId:      () => optionalEnv('GHL_LOCATION_ID'),
   ghlWebhookSecret:   () => optionalEnv('GHL_WEBHOOK_SECRET'),
 
+  // GA4 (funnel page-view metrics — service-account auth)
+  ga4PropertyId:        () => optionalEnv('GA4_PROPERTY_ID'),
+  ga4ServiceAccountKey: () => optionalEnv('GA4_SERVICE_ACCOUNT_KEY'),
+
   // AI
   anthropicApiKey:    () => optionalEnv('ANTHROPIC_API_KEY'),
+  openrouterApiKey:   () => optionalEnv('OPENROUTER_API_KEY'),
+  openrouterModel:    () => optionalEnv('OPENROUTER_MODEL') || 'anthropic/claude-sonnet-4.5',
 
   // Misc
   nodeEnv:            () => process.env.NODE_ENV || 'development',
@@ -62,5 +68,7 @@ export function envStatus() {
       !!process.env.FINANCIALS_PASSWORD,
     metaCapi: !!process.env.META_PIXEL_ID && !!process.env.META_ACCESS_TOKEN,
     ghlWebhook: !!process.env.GHL_WEBHOOK_SECRET,
+    ga4: !!process.env.GA4_PROPERTY_ID && !!process.env.GA4_SERVICE_ACCOUNT_KEY,
+    aiChat: !!process.env.OPENROUTER_API_KEY,
   };
 }

@@ -420,3 +420,64 @@ from public.sales_metrics;
 -- Convenience: client cohort with current activity flag
 create or replace view public.v_clients_active as
 select * from public.clients where status = 'active';
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- AI chat RPC: lgs_exec_sql
+--   Lets the /dashboard/ask page run read-only SQL against this schema on
+--   behalf of an LLM tool-call. SECURITY DEFINER so it bypasses RLS, but
+--   EXECUTE is granted only to service_role — the function is unreachable
+--   from anon/authenticated/PostgREST. The Next.js server is the sole caller.
+--
+-- Safety:
+--   - Only SELECT or WITH queries accepted (case-insensitive, comments stripped)
+--   - Single statement only (semicolons inside the body rejected)
+--   - 10-second statement timeout per call
+--   - Result capped at 1000 rows (extra rows truncated server-side)
+-- ─────────────────────────────────────────────────────────────────────────────
+create or replace function public.lgs_exec_sql(query text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  result jsonb;
+  cleaned text;
+  body text;
+begin
+  -- Strip leading whitespace + line/block comments so callers can't sneak
+  -- a write statement in behind `-- ...` or `/* ... */`.
+  cleaned := regexp_replace(query, '--[^\n]*', '', 'g');
+  cleaned := regexp_replace(cleaned, '/\*.*?\*/', '', 'gs');
+  cleaned := ltrim(cleaned);
+
+  if cleaned is null or length(cleaned) = 0 then
+    raise exception 'Empty query';
+  end if;
+
+  if not (lower(cleaned) like 'select%' or lower(cleaned) like 'with%') then
+    raise exception 'Only SELECT and WITH queries are permitted';
+  end if;
+
+  -- Reject multiple statements. Trailing semicolons + whitespace are OK.
+  body := rtrim(cleaned, '; ' || E'\n' || E'\t');
+  if position(';' in body) > 0 then
+    raise exception 'Multiple statements not permitted';
+  end if;
+
+  perform set_config('statement_timeout', '10s', true);
+
+  execute format(
+    'select coalesce(jsonb_agg(row_to_json(t)::jsonb), ''[]''::jsonb) from (%s limit 1000) t',
+    body
+  )
+  into result;
+
+  return result;
+end;
+$$;
+
+revoke all on function public.lgs_exec_sql(text) from public;
+revoke all on function public.lgs_exec_sql(text) from anon;
+revoke all on function public.lgs_exec_sql(text) from authenticated;
+grant execute on function public.lgs_exec_sql(text) to service_role;

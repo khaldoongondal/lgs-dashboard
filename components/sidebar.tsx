@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { COOKIE, verify } from '@/lib/auth/session';
 import {
-  IconChart, IconUsers, IconWallet, IconSettings, IconBox, IconLock,
+  IconChart, IconUsers, IconWallet, IconSettings, IconBox, IconLock, IconFunnel, IconSparkle,
 } from './icons';
 
 /**
@@ -15,9 +15,14 @@ export default async function Sidebar({ current }: { current?: string }) {
   const hasFinancials = !!secret && (await verify(finCookie, 'financials', secret));
 
   const items = [
-    { href: '/dashboard', label: 'Ad Attribution', Icon: IconChart },
-    { href: '/sales',     label: 'Sales',          Icon: IconUsers },
-    { href: '/clients',   label: 'Clients',        Icon: IconBox, soon: true },
+    { href: '/dashboard',           label: 'Ad Attribution', Icon: IconChart   },
+    { href: '/dashboard/funnel',    label: 'Funnel',         Icon: IconFunnel  },
+    { href: '/dashboard/insights',  label: 'Insights',       Icon: IconChart   },
+    { href: '/dashboard/ask',       label: 'Ask AI',         Icon: IconSparkle },
+    { href: '/dashboard/capi-log',  label: 'CAPI Log',       Icon: IconChart   },
+    { href: '/leads',               label: 'Leads',          Icon: IconUsers  },
+    { href: '/sales',               label: 'Sales',          Icon: IconUsers  },
+    { href: '/clients',             label: 'Clients',        Icon: IconBox    },
     ...(hasFinancials
       ? [{ href: '/financials', label: 'Financials', Icon: IconWallet, lock: true }]
       : []),
@@ -32,26 +37,22 @@ export default async function Sidebar({ current }: { current?: string }) {
       </div>
 
       <nav className="p-3 space-y-1">
-        {items.map(({ href, label, Icon, lock, soon }) => {
-          const active = current === href;
+        {items.map(({ href, label, Icon, lock }) => {
+          const active = current === href || (current ?? '').startsWith(href + '/');
           return (
             <Link
               key={href}
-              href={soon ? '#' : href}
-              aria-disabled={soon}
+              href={href}
               className={[
                 'flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors',
                 active
                   ? 'bg-slate-900 text-white'
-                  : soon
-                    ? 'text-slate-400 cursor-not-allowed'
-                    : 'text-slate-700 hover:bg-slate-50',
+                  : 'text-slate-700 hover:bg-slate-50',
               ].join(' ')}
             >
               <Icon className={active ? 'text-white' : 'text-slate-400'} />
               <span className="flex-1">{label}</span>
               {lock && <IconLock className="text-slate-400" width={14} height={14} />}
-              {soon && <span className="text-[10px] uppercase tracking-wide text-slate-400">soon</span>}
             </Link>
           );
         })}

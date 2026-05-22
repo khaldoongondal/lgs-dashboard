@@ -13,6 +13,9 @@ const base: Props = {
   strokeLinejoin: 'round',
 };
 
+export const IconSparkle = (p: Props) => (
+  <svg {...base} {...p}><path d="M12 3l1.7 4.6L18 9l-4.3 1.4L12 15l-1.7-4.6L6 9l4.3-1.4L12 3z" /><path d="M19 14l.8 2L22 17l-2.2 1L19 20l-.8-2L16 17l2.2-1L19 14z" /></svg>
+);
 export const IconChart = (p: Props) => (
   <svg {...base} {...p}><path d="M3 3v18h18" /><path d="M7 14l4-4 4 4 5-6" /></svg>
 );
@@ -27,6 +30,9 @@ export const IconSettings = (p: Props) => (
 );
 export const IconLock = (p: Props) => (
   <svg {...base} {...p}><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V8a4 4 0 1 1 8 0v3" /></svg>
+);
+export const IconFunnel = (p: Props) => (
+  <svg {...base} {...p}><path d="M3 5h18l-7 8v6l-4-2v-4L3 5z" /></svg>
 );
 export const IconCalendar = (p: Props) => (
   <svg {...base} {...p}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /></svg>

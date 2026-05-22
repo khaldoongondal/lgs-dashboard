@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/meta-spend",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/sales-aggregate",
+      "schedule": "30 8 * * *"
     }
   ]
 }

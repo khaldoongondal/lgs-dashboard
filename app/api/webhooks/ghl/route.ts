@@ -28,12 +28,24 @@ import { env } from '@/lib/env';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const TYPE_MAP: Record<string, InternalEvent> = {
+// All pipeline-event names we accept. Only the four CAPI_EVENTS get forwarded
+// to Meta — OfferMade and Churned are internal sales-tracking signals only.
+type GhlEventName =
+  | 'Lead' | 'AppointmentBooked' | 'AppointmentShown'
+  | 'OfferMade' | 'Purchase' | 'Churned';
+
+const TYPE_MAP: Record<string, GhlEventName> = {
   lead:     'Lead',
   booked:   'AppointmentBooked',
   shown:    'AppointmentShown',
+  offer:    'OfferMade',
   purchase: 'Purchase',
+  churn:    'Churned',
 };
+
+const CAPI_EVENTS = new Set<GhlEventName>(
+  ['Lead', 'AppointmentBooked', 'AppointmentShown', 'Purchase']
+);
 
 async function hmacHexSha256(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -122,6 +134,19 @@ async function resolveAnonymousSession(
   return { tier: null, row: null };
 }
 
+/** Pull the configured ARPU from expense_config so new clients with no deal_value get a sane default. */
+async function defaultArpu(sb: ReturnType<typeof serviceClient>): Promise<number> {
+  const { data } = await sb
+    .from('expense_config')
+    .select('value_numeric')
+    .eq('key', 'arpu')
+    .eq('scope', 'default')
+    .limit(1);
+  const v = (data?.[0] as any)?.value_numeric;
+  const num = v != null ? Number(v) : NaN;
+  return Number.isFinite(num) && num > 0 ? num : 297;
+}
+
 /** Backfill page_view_events.contact_id for any rows matching this contact's signals. */
 async function backfillPageViews(
   sb: ReturnType<typeof serviceClient>,
@@ -158,7 +183,7 @@ export async function POST(req: Request) {
   const eventName = TYPE_MAP[type.toLowerCase()];
   if (!eventName) {
     return NextResponse.json(
-      { error: 'unknown type — use ?type=lead|booked|shown|purchase' },
+      { error: 'unknown type — use ?type=lead|booked|shown|offer|purchase|churn' },
       { status: 400 }
     );
   }
@@ -212,6 +237,8 @@ export async function POST(req: Request) {
   };
   const formFbclid      = cf.fbclid      ?? payload.fbclid      ?? null;
   const formFingerprint = cf.fingerprint ?? payload.fingerprint ?? null;
+  const claritySessionUrl =
+    cf.clarity_session_url ?? payload.clarity_session_url ?? null;
 
   // Appointment / opportunity data
   const appointment = payload.appointment ?? null;
@@ -268,6 +295,7 @@ export async function POST(req: Request) {
         ...utm,
         fbclid:      formFbclid,
         fingerprint: resolvedFingerprint,
+        clarity_session_url: claritySessionUrl,
         tags,
         raw_payload: payload,
         updated_at: new Date().toISOString(),
@@ -320,33 +348,68 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'db_error', detail: evIns.error.message }, { status: 500 });
   }
 
-  // Forward to Meta CAPI — pull in every signal we have for max EMQ.
-  const capi = await sendCapiEvent({
-    eventName,
-    eventId,
-    eventTimeUnix: Math.floor(new Date(eventTime).getTime() / 1000),
-    eventSourceUrl: payload.source_url ?? undefined,
-    user: {
-      email, firstName, lastName, phone,
-      fbc:        resolvedFbc        ?? undefined,
-      fbp:        resolvedFbp        ?? undefined,
-      externalId: resolvedFingerprint ?? undefined,
-      clientIp:   resolvedIp         ?? undefined,
-      userAgent:  resolvedUa         ?? undefined,
-      city:       resolvedCity       ?? undefined,
-      state:      resolvedRegion     ?? undefined,
-      country:    resolvedCountry    ?? undefined,
-    },
-    value:    eventName === 'Purchase' ? dealValue : undefined,
-    currency: opportunity?.currency ?? 'CAD',
-    orderId:  opportunity?.id ?? undefined,
-    contactId: contactRowId,
-    source:    'ghl_webhook',
-  });
+  // Auto-create / update client record on Purchase. Tracks LTV from day one.
+  if (eventName === 'Purchase' && contactRowId) {
+    const arpu = await defaultArpu(sb);
+    await sb.from('clients').upsert(
+      [{
+        ghl_contact_id:      String(contactId),
+        contact_id:          contactRowId,
+        status:              'active',
+        started_at:          eventTime,
+        mrr_value:           dealValue > 0 ? dealValue : arpu,
+        attributed_campaign: utm.utm_campaign,
+        attributed_ad:       utm.utm_content,
+        attributed_source:   utm.utm_source,
+        rep_id:              repId   ? String(repId) : null,
+        rep_name:            repName,
+        last_payment_date:   eventTime.slice(0, 10),
+      }],
+      { onConflict: 'ghl_contact_id', ignoreDuplicates: false }
+    );
+  }
+  // Auto-mark client as churned on Churned event.
+  if (eventName === 'Churned' && contactId) {
+    await sb.from('clients').update({
+      status:       'churned',
+      churned_at:   eventTime,
+      churn_source: 'auto_chargeback',
+    }).eq('ghl_contact_id', String(contactId));
+  }
+
+  // Forward to Meta CAPI only for the four spec-defined events. OfferMade and
+  // Churned are sales-internal — Meta has no use for them and sending would
+  // pollute the CAPI feed.
+  let capiOk: boolean | null = null;
+  if (CAPI_EVENTS.has(eventName)) {
+    const capi = await sendCapiEvent({
+      eventName: eventName as InternalEvent,
+      eventId,
+      eventTimeUnix: Math.floor(new Date(eventTime).getTime() / 1000),
+      eventSourceUrl: payload.source_url ?? undefined,
+      user: {
+        email, firstName, lastName, phone,
+        fbc:        resolvedFbc         ?? undefined,
+        fbp:        resolvedFbp         ?? undefined,
+        externalId: resolvedFingerprint ?? undefined,
+        clientIp:   resolvedIp          ?? undefined,
+        userAgent:  resolvedUa          ?? undefined,
+        city:       resolvedCity        ?? undefined,
+        state:      resolvedRegion      ?? undefined,
+        country:    resolvedCountry     ?? undefined,
+      },
+      value:    eventName === 'Purchase' ? dealValue : undefined,
+      currency: opportunity?.currency ?? 'CAD',
+      orderId:  opportunity?.id ?? undefined,
+      contactId: contactRowId,
+      source:    'ghl_webhook',
+    });
+    capiOk = capi.ok;
+  }
 
   return NextResponse.json({
-    ok: true,
-    capi_sent:  capi.ok,
-    resolution: session.tier,   // which tier matched (or null)
+    ok:         true,
+    capi_sent:  capiOk,   // null = not a CAPI event (offer / churn)
+    resolution: session.tier,
   });
 }

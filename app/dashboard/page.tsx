@@ -6,6 +6,7 @@ import {
   aggregateAttribution, totalsRow,
   type DrillLevel, type AttributionFilter, type AttributionRow,
 } from '@/lib/queries/attribution';
+import { detectAnomalies, type Anomaly } from '@/lib/queries/anomalies';
 import { fmtCurrency, fmtNumber } from '@/lib/format';
 import Link from 'next/link';
 
@@ -74,7 +75,10 @@ export default async function DashboardPage({
     active:   searchParams.active === '1',
   };
 
-  const rows = await aggregateAttribution(level, range.from, range.to, filter);
+  const [rows, anomalies] = await Promise.all([
+    aggregateAttribution(level, range.from, range.to, filter),
+    detectAnomalies(),
+  ]);
   const total = totalsRow(rows);
 
   const baseParams: Partial<SP> = {
@@ -124,6 +128,9 @@ export default async function DashboardPage({
   return (
     <PageShell current="/dashboard" title="Ad Attribution"
       subtitle={`${range.from} → ${range.to}`} range={range}>
+
+      {/* Anomaly cards — yesterday vs 7d baseline */}
+      <AnomalyBanner anomalies={anomalies} />
 
       {/* Funnel KPIs */}
       <section className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
@@ -349,9 +356,22 @@ function DrillTable({
             <span>{r.label}</span>
           );
 
+          const labelWithThumb = level === 'ad' && r.thumbnail_url ? (
+            <span className="flex items-center gap-2">
+              {r.permalink_url ? (
+                <a href={r.permalink_url} target="_blank" rel="noopener noreferrer" title="Open in Meta">
+                  <img src={r.thumbnail_url} alt="" className="w-10 h-10 rounded object-cover border border-slate-200" />
+                </a>
+              ) : (
+                <img src={r.thumbnail_url} alt="" className="w-10 h-10 rounded object-cover border border-slate-200" />
+              )}
+              {labelCell}
+            </span>
+          ) : labelCell;
+
           return (
             <tr key={r.key}>
-              <td className="font-medium text-slate-900">{labelCell}</td>
+              <td className="font-medium text-slate-900">{labelWithThumb}</td>
               {showStatus && (
                 <td className="text-left">
                   <StatusPill status={r.status} />
@@ -436,6 +456,36 @@ function CreativeCells({ r }: { r: AttributionRow }) {
       {num(r.unique_link_clicks)}
       {curOrDash(r.cost_per_link_click)}
     </>
+  );
+}
+
+function AnomalyBanner({ anomalies }: { anomalies: Anomaly[] }) {
+  if (anomalies.length === 0) return null;
+  return (
+    <section className="mb-6">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500 mb-2">
+        Yesterday vs 7-day baseline · {anomalies.length} anomaly{anomalies.length === 1 ? '' : 'ies'}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {anomalies.slice(0, 6).map((a) => {
+          const tint =
+            a.sentiment === 'bad'  ? 'bg-red-50      border-red-200      text-red-800'      :
+            a.sentiment === 'good' ? 'bg-emerald-50  border-emerald-200  text-emerald-800'  :
+                                     'bg-slate-50    border-slate-200    text-slate-800';
+          const arrow = a.direction === 'up' ? '▲' : '▼';
+          return (
+            <div key={a.metric} className={`border rounded-lg p-3 ${tint}`}>
+              <div className="text-xs uppercase tracking-wide opacity-75">{a.label}</div>
+              <div className="mt-1 text-sm font-medium flex items-center gap-1.5">
+                <span className="text-base">{arrow}</span>
+                <span>{Math.abs(a.delta_pct * 100).toFixed(0)}%</span>
+              </div>
+              <p className="mt-1 text-xs opacity-90">{a.summary}</p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
