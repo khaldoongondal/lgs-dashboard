@@ -22,6 +22,7 @@ import { UAParser } from 'ua-parser-js';
 import { serviceClient } from '@/lib/supabase/server';
 import { sendCapiEvent } from '@/lib/meta-capi';
 import { buildFbc } from '@/lib/hash';
+import { corsPreflight, withCors } from '@/lib/cors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -76,7 +77,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
+    return withCors(req, NextResponse.json({ error: 'invalid_json' }, { status: 400 }));
   }
 
   const {
@@ -88,10 +89,10 @@ export async function POST(req: Request) {
   } = body ?? {};
 
   if (!event_id) {
-    return NextResponse.json({ error: 'event_id is required' }, { status: 400 });
+    return withCors(req, NextResponse.json({ error: 'event_id is required' }, { status: 400 }));
   }
   if (!ALLOWED_EVENTS.has(event_name)) {
-    return NextResponse.json({ error: `unknown event_name: ${event_name}` }, { status: 400 });
+    return withCors(req, NextResponse.json({ error: `unknown event_name: ${event_name}` }, { status: 400 }));
   }
 
   const clientIp = (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim() || null;
@@ -133,7 +134,7 @@ export async function POST(req: Request) {
 
     if (insert.error) {
       console.error('[events] insert error:', insert.error.message);
-      return NextResponse.json({ error: 'db_error' }, { status: 500 });
+      return withCors(req, NextResponse.json({ error: 'db_error' }, { status: 500 }));
     }
 
     // Fire Meta CAPI ViewContent for page-views only (skip funnel-internal events)
@@ -157,22 +158,14 @@ export async function POST(req: Request) {
       }).catch(() => {});
     }
 
-    return NextResponse.json({ ok: true });
+    return withCors(req, NextResponse.json({ ok: true }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[events] handler error:', message);
-    return NextResponse.json({ error: 'server_error', detail: message }, { status: 500 });
+    return withCors(req, NextResponse.json({ error: 'server_error', detail: message }, { status: 500 }));
   }
 }
 
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin':  '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Max-Age':       '600',
-    },
-  });
+export async function OPTIONS(req: Request) {
+  return corsPreflight(req);
 }

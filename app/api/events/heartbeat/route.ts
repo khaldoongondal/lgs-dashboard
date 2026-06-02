@@ -8,6 +8,7 @@
  */
 import { NextResponse } from 'next/server';
 import { serviceClient } from '@/lib/supabase/server';
+import { corsPreflight, withCors } from '@/lib/cors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -15,12 +16,12 @@ export const runtime = 'nodejs';
 export async function POST(req: Request) {
   let body: any;
   try { body = await req.json(); }
-  catch { return NextResponse.json({ error: 'invalid_json' }, { status: 400 }); }
+  catch { return withCors(req, NextResponse.json({ error: 'invalid_json' }, { status: 400 })); }
 
   const event_id = String(body?.event_id || '');
   const seconds  = Math.max(0, Math.min(7200, Number(body?.time_on_page) || 0));
   if (!event_id) {
-    return NextResponse.json({ error: 'event_id_required' }, { status: 400 });
+    return withCors(req, NextResponse.json({ error: 'event_id_required' }, { status: 400 }));
   }
 
   const sb = serviceClient();
@@ -33,23 +34,15 @@ export async function POST(req: Request) {
     .limit(1);
 
   const row = existing?.[0] as { id: number; time_on_page: number | null } | undefined;
-  if (!row) return NextResponse.json({ ok: false, reason: 'not_found' });
+  if (!row) return withCors(req, NextResponse.json({ ok: false, reason: 'not_found' }));
 
   const current = row.time_on_page ?? 0;
   if (seconds > current) {
     await sb.from('page_view_events').update({ time_on_page: seconds }).eq('id', row.id);
   }
-  return NextResponse.json({ ok: true, time_on_page: Math.max(seconds, current) });
+  return withCors(req, NextResponse.json({ ok: true, time_on_page: Math.max(seconds, current) }));
 }
 
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      'Access-Control-Allow-Origin':  '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Max-Age':       '600',
-    },
-  });
+export async function OPTIONS(req: Request) {
+  return corsPreflight(req);
 }
