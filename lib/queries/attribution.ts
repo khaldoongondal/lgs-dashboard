@@ -93,9 +93,17 @@ function bucketKey(level: DrillLevel, row: any): { key: string; label: string } 
     case 'source':   return { key: row.utm_source   || '(direct)',     label: row.utm_source   || '(direct)' };
     case 'medium':   return { key: row.utm_medium   || '(none)',       label: row.utm_medium   || '(none)' };
     case 'campaign': return { key: row.utm_campaign || '(no campaign)', label: row.utm_campaign || '(no campaign)' };
-    case 'adset':    return { key: row.adset_name   || row.adset_id || '(no adset)', label: row.adset_name || row.adset_id || '(no adset)' };
+    case 'adset':    return {
+      // Join on adset id carried in utm_term (set utm_term={{adset.id}}); meta side has adset_id.
+      key:   row.adset_id || row.utm_term || '(no adset)',
+      label: row.adset_name || row.utm_term || '(no adset)',
+    };
     case 'ad':       return {
-      key:   row.ad_name || `${row.utm_campaign || ''}|${row.utm_content || ''}`,
+      // Ad-level join key = the ad id carried in utm_content (set utm_content={{ad.id}}
+      // on the Meta ad URL). The meta-spend side also puts ad_id into utm_content (see the
+      // `synthetic` row below), so spend and conversions land in the SAME bucket.
+      // Joining on the immutable ad id — not the name — survives ad renames.
+      key:   row.utm_content || '(no ad)',
       label: row.ad_name || row.utm_content || '(no ad)',
     };
   }
@@ -200,8 +208,8 @@ export async function aggregateAttribution(
       utm_source:   'meta',
       utm_medium:   'paid-social',
       utm_campaign: rr.campaign_name,
-      utm_content:  rr.ad_name,
-      ad_name:      rr.ad_name,
+      utm_content:  rr.ad_id,        // ad-level join key — matches the lead's utm_content={{ad.id}}
+      ad_name:      rr.ad_name,      // display label for the ad row
       adset_name:   rr.adset_name,
       adset_id:     rr.adset_id,
     };
