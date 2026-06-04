@@ -95,7 +95,8 @@
   }
 
   function captureUtms() {
-    var keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term'];
+    var keys = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term',
+                'utm_adset','utm_adid','utm_adsetid','utm_campaignid'];
     var out = {};
     keys.forEach(function (k) {
       var v = getParam(k);
@@ -204,6 +205,11 @@
       utm_campaign: utms.utm_campaign || null,
       utm_content:  utms.utm_content  || null,
       utm_term:     utms.utm_term     || null,
+      // Ad-hierarchy IDs + adset name from the Meta URL template (rename-proof join keys)
+      utm_adset:      utms.utm_adset      || null,
+      utm_adid:       utms.utm_adid       || null,
+      utm_adsetid:    utms.utm_adsetid    || null,
+      utm_campaignid: utms.utm_campaignid || null,
     };
   }
 

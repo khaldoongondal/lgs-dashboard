@@ -74,11 +74,16 @@ type SessionRow = {
   utm_campaign: string | null;
   utm_content:  string | null;
   utm_term:     string | null;
+  utm_adset:      string | null;
+  utm_adid:       string | null;
+  utm_adsetid:    string | null;
+  utm_campaignid: string | null;
 };
 
 const SESSION_FIELDS =
   'id,fingerprint,fbc,fbp,client_ip,user_agent,country,region,city,' +
-  'utm_source,utm_medium,utm_campaign,utm_content,utm_term';
+  'utm_source,utm_medium,utm_campaign,utm_content,utm_term,' +
+  'utm_adset,utm_adid,utm_adsetid,utm_campaignid';
 
 type ResolutionTier = 'fbclid' | 'fingerprint' | 'email' | null;
 
@@ -234,6 +239,11 @@ export async function POST(req: Request) {
     utm_campaign: cf.utm_campaign ?? payload.utm_campaign ?? null,
     utm_content:  cf.utm_content  ?? payload.utm_content  ?? null,
     utm_term:     cf.utm_term     ?? payload.utm_term     ?? null,
+    // Ad-hierarchy IDs + adset name (rename-proof join keys from the Meta URL template)
+    utm_adset:      cf.utm_adset      ?? payload.utm_adset      ?? null,
+    utm_adid:       cf.utm_adid       ?? payload.utm_adid       ?? null,
+    utm_adsetid:    cf.utm_adsetid    ?? payload.utm_adsetid    ?? null,
+    utm_campaignid: cf.utm_campaignid ?? payload.utm_campaignid ?? null,
   };
   const formFbclid      = cf.fbclid      ?? payload.fbclid      ?? null;
   const formFingerprint = cf.fingerprint ?? payload.fingerprint ?? null;
@@ -272,6 +282,10 @@ export async function POST(req: Request) {
     utm_campaign: formUtms.utm_campaign ?? session.row?.utm_campaign ?? null,
     utm_content:  formUtms.utm_content  ?? session.row?.utm_content  ?? null,
     utm_term:     formUtms.utm_term     ?? session.row?.utm_term     ?? null,
+    utm_adset:      formUtms.utm_adset      ?? session.row?.utm_adset      ?? null,
+    utm_adid:       formUtms.utm_adid       ?? session.row?.utm_adid       ?? null,
+    utm_adsetid:    formUtms.utm_adsetid    ?? session.row?.utm_adsetid    ?? null,
+    utm_campaignid: formUtms.utm_campaignid ?? session.row?.utm_campaignid ?? null,
   };
   const resolvedFingerprint = formFingerprint ?? session.row?.fingerprint ?? null;
   const resolvedFbc         = cf.fbc ?? payload.fbc ?? session.row?.fbc ?? null;

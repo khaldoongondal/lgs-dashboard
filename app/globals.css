@@ -18,24 +18,64 @@ html, body {
 
 @layer components {
   .card {
-    @apply bg-white border border-slate-200 rounded-xl shadow-card;
+    @apply bg-white border border-slate-200 rounded-2xl shadow-card;
   }
   .card-pad {
     @apply card p-5;
   }
+  /* Interactive cards: subtle lift on hover. */
+  .card-hover {
+    @apply transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lift;
+  }
+
   .btn {
-    @apply inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium transition-colors;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2
+           text-sm font-medium transition-colors focus:outline-none
+           focus-visible:ring-2 focus-visible:ring-offset-1;
   }
   .btn-primary {
-    @apply btn bg-slate-900 text-white hover:bg-slate-800;
+    @apply btn bg-brand text-white hover:bg-brand-700 focus-visible:ring-brand-300;
   }
   .btn-secondary {
-    @apply btn bg-white text-slate-900 border border-slate-200 hover:bg-slate-50;
+    @apply btn bg-white text-slate-900 border border-slate-200 hover:bg-slate-50
+           focus-visible:ring-slate-200;
   }
+
+  /* Tabs / drill / view / status-filter buttons all share this. */
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-lg border border-slate-200
+           bg-white px-3 py-1.5 text-xs font-medium text-slate-600
+           transition-colors hover:bg-slate-50 hover:text-slate-900;
+  }
+  .pill-active {
+    @apply border-brand-200 bg-brand-50 text-brand-700
+           hover:bg-brand-50 hover:text-brand-700;
+  }
+
+  /* Neutral badge base — pages override colors with bg/text/border utilities. */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-md border border-slate-200
+           bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-600;
+  }
+
+  /* Sidebar nav items. */
+  .nav-link {
+    @apply relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm
+           font-medium text-slate-600 transition-colors
+           hover:bg-slate-50 hover:text-slate-900;
+  }
+  .nav-link-active {
+    @apply bg-brand-50 text-brand-700 hover:bg-brand-50 hover:text-brand-700;
+  }
+  .nav-link-active::before {
+    @apply absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-brand;
+    content: '';
+  }
+
   .input {
     @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm
-           placeholder:text-slate-400 focus:border-slate-400 focus:outline-none
-           focus:ring-2 focus:ring-slate-200;
+           placeholder:text-slate-400 focus:border-brand-400 focus:outline-none
+           focus:ring-2 focus:ring-brand-100;
   }
   .label {
     @apply block text-xs font-medium uppercase tracking-wide text-slate-500 mb-1;
@@ -50,15 +90,15 @@ html, body {
   @apply w-full text-sm;
 }
 .lgs-table thead th {
-  @apply text-left text-xs font-medium uppercase tracking-wide text-slate-500
-         border-b border-slate-200 px-3 py-2 bg-slate-50;
+  @apply text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500
+         border-b border-slate-200 px-3 py-2.5 bg-slate-50/70 whitespace-nowrap;
 }
 .lgs-table tbody td {
-  @apply border-b border-slate-100 px-3 py-2.5 text-slate-800;
+  @apply border-b border-slate-100 px-3 py-2.5 text-slate-700;
 }
 .lgs-table tbody tr:hover td {
-  @apply bg-slate-50;
+  @apply bg-brand-50/40;
 }
 .lgs-table tbody tr.summary td {
-  @apply bg-slate-50 font-semibold text-slate-900;
+  @apply bg-brand-50/60 font-semibold text-slate-900;
 }

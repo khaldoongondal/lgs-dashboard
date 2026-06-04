@@ -87,7 +87,7 @@ const COLS: Col[] = GROUPS.flatMap((g) => g.cols);
 const TOTAL_COLS = COLS.length + 1; // +1 for the period label column
 
 // Distinct line colours for chart series.
-const C = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+const C = ['#16a34a', '#0ea5e9', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6', '#ec4899'];
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -216,9 +216,9 @@ export default function SalesPerformance({ year, defaultMonth, reps, cells, tier
         <div className="min-w-0">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reps</span>
-            <button onClick={allOn} className="text-[11px] text-indigo-600 hover:underline">All</button>
+            <button onClick={allOn} className="text-[11px] text-brand-700 hover:underline">All</button>
             <span className="text-slate-300">·</span>
-            <button onClick={allOff} className="text-[11px] text-indigo-600 hover:underline">None</button>
+            <button onClick={allOff} className="text-[11px] text-brand-700 hover:underline">None</button>
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             {reps.length === 0 && <span className="text-xs text-slate-400">No reps with data yet</span>}
@@ -228,7 +228,7 @@ export default function SalesPerformance({ year, defaultMonth, reps, cells, tier
                   type="checkbox"
                   checked={checked.has(r.rep_id)}
                   onChange={() => toggleRep(r.rep_id)}
-                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                  className="rounded border-slate-300 text-brand-600 focus:ring-brand-400"
                 />
                 {r.rep_name}
               </label>
@@ -356,7 +356,7 @@ function GroupRow({ label }: { label: string }) {
 
 function DataRow({ r, stripe }: { r: Row; stripe?: boolean }) {
   const isSummary = r.kind === 'total' || r.kind === 'avg';
-  const rowBg = isSummary ? 'bg-slate-100' : r.kind === 'quarter' ? 'bg-indigo-50/40' : stripe ? 'bg-slate-50/60' : 'bg-white';
+  const rowBg = isSummary ? 'bg-slate-100' : r.kind === 'quarter' ? 'bg-brand-50/50' : stripe ? 'bg-slate-50/60' : 'bg-white';
   const labelWeight = isSummary || r.kind === 'quarter' ? 'font-semibold text-slate-900' : 'font-medium text-slate-800';
 
   return (

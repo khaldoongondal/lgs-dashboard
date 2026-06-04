@@ -33,14 +33,16 @@ export default function DateRangePicker({
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex rounded-lg border border-slate-200 bg-white overflow-hidden">
+      <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-0.5">
         {PRESETS.map((p) => (
           <button
             key={p.value}
             onClick={() => go({ preset: p.value, from: null, to: null })}
             className={[
-              'px-3 py-1.5 text-xs font-medium border-l first:border-l-0 border-slate-200',
-              preset === p.value ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50',
+              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+              preset === p.value
+                ? 'bg-white text-brand-700 shadow-card'
+                : 'text-slate-500 hover:text-slate-900',
             ].join(' ')}
           >
             {p.label}
@@ -48,20 +50,20 @@ export default function DateRangePicker({
         ))}
       </div>
 
-      <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
+      <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-100">
         <IconCalendar className="text-slate-400" width={14} height={14} />
         <input
           type="date"
           value={from}
           onChange={(e) => go({ preset: 'custom', from: e.target.value, to })}
-          className="text-xs bg-transparent text-slate-700 outline-none"
+          className="bg-transparent text-xs text-slate-700 outline-none"
         />
-        <span className="text-slate-400 text-xs">→</span>
+        <span className="text-xs text-slate-400">→</span>
         <input
           type="date"
           value={to}
           onChange={(e) => go({ preset: 'custom', from, to: e.target.value })}
-          className="text-xs bg-transparent text-slate-700 outline-none"
+          className="bg-transparent text-xs text-slate-700 outline-none"
         />
       </div>
     </div>

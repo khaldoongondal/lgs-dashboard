@@ -10,28 +10,32 @@ interface Props {
 
 export default function StatCard({ label, value, delta, hint, accent = 'default' }: Props) {
   const deltaPositive = (delta ?? 0) >= 0;
-  const accentRing = {
-    default: 'ring-slate-100',
-    success: 'ring-emerald-100',
-    warn:    'ring-amber-100',
-    danger:  'ring-rose-100',
+
+  const accentBar = {
+    default: 'bg-slate-200',
+    success: 'bg-brand-500',
+    warn:    'bg-amber-400',
+    danger:  'bg-rose-400',
   }[accent];
 
   return (
-    <div className={`card-pad ring-1 ${accentRing}`}>
+    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-card transition-shadow hover:shadow-soft">
+      {/* left accent bar */}
+      <span className={`absolute inset-y-0 left-0 w-1 ${accentBar}`} />
+
       <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-2 flex items-end justify-between gap-2">
-        <div className="text-2xl font-semibold text-slate-900 tabular-nums">{value}</div>
+        <div className="text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
         {delta !== undefined && delta !== null && (
-          <div
+          <span
             className={[
-              'flex items-center gap-0.5 text-xs font-medium',
-              deltaPositive ? 'text-emerald-600' : 'text-rose-600',
+              'inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-semibold',
+              deltaPositive ? 'bg-brand-50 text-brand-700' : 'bg-rose-50 text-rose-600',
             ].join(' ')}
           >
-            {deltaPositive ? <IconArrowUpRight width={14} height={14} /> : <IconArrowDownRight width={14} height={14} />}
+            {deltaPositive ? <IconArrowUpRight width={13} height={13} /> : <IconArrowDownRight width={13} height={13} />}
             {(Math.abs(delta) * 100).toFixed(1)}%
-          </div>
+          </span>
         )}
       </div>
       {hint && <div className="mt-1 text-xs text-slate-500">{hint}</div>}

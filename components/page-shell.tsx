@@ -15,19 +15,19 @@ export default async function PageShell({
   current, title, subtitle, range, showDatePicker = true, children,
 }: Props) {
   return (
-    <div className="flex min-h-screen relative">
+    <div className="flex min-h-screen bg-slate-50">
       <Sidebar current={current} />
-      <div className="flex-1 min-w-0">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold text-slate-900">{title}</h1>
-            {subtitle && <p className="text-xs text-slate-500 mt-0.5">{subtitle}</p>}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-slate-200 bg-white/80 px-6 py-4 backdrop-blur-md">
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold tracking-tight text-slate-900">{title}</h1>
+            {subtitle && <p className="mt-0.5 truncate text-xs text-slate-500">{subtitle}</p>}
           </div>
           {showDatePicker && (
             <DateRangePicker preset={range.preset} from={range.from} to={range.to} />
           )}
         </header>
-        <main className="p-6">{children}</main>
+        <main className="flex-1 p-6">{children}</main>
       </div>
     </div>
   );

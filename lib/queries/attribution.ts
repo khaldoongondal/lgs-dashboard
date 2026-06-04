@@ -1,10 +1,24 @@
 /**
  * Attribution aggregation across meta_ad_performance + page_view_events +
- * ghl_pipeline_events. Joined in JS by UTM keys + Meta's own hierarchy.
+ * ghl_pipeline_events. Joined in JS by Meta's immutable hierarchy IDs.
  *
  * 5 drill levels: source | campaign | adset | medium | ad.
  * Hierarchical drill — supply `filter.source`, `filter.campaign`, `filter.adset`
  * to scope deeper levels.
+ *
+ * Join keys are the Meta IDs carried on the ad URL template:
+ *   utm_campaignid = {{campaign.id}}  → meta_ad_performance.campaign_id
+ *   utm_adsetid    = {{adset.id}}     → meta_ad_performance.adset_id
+ *   utm_adid       = {{ad.id}}        → meta_ad_performance.ad_id
+ * Display names come from utm_campaign / utm_adset / utm_content, but are
+ * overridden by the canonical Meta name looked up by ID. Joining on the
+ * immutable ID — not the name — means a campaign/adset/ad rename never splits
+ * a row's spend from its conversions.
+ *
+ * Filters (drill-down) are name-based: the dashboard passes the clicked row's
+ * label (a name) as the filter for the next level. Names are unique in practice
+ * within an already-scoped parent, so name filtering is safe; the ID join is
+ * what keeps spend and conversions precisely aligned.
  *
  * Active-only flag hides rows where Meta's effective_status is paused/archived.
  *
@@ -20,6 +34,13 @@
 import { maybeServiceClient } from '@/lib/supabase/server';
 
 export type DrillLevel = 'source' | 'campaign' | 'adset' | 'medium' | 'ad';
+
+// The Meta ad URL template tags clicks with these. Spend rows are tagged with
+// the same source/medium so they bucket together with their conversions at the
+// source/medium levels. MUST match the utm_source / utm_medium you set in the
+// Meta Ads Manager URL parameters.
+const SPEND_SOURCE = 'facebook';
+const SPEND_MEDIUM = 'cpc';
 
 export interface AttributionFilter {
   source?:   string;
@@ -88,48 +109,96 @@ function isActiveStatus(s?: string | null): boolean {
   return s === 'ACTIVE';
 }
 
-function bucketKey(level: DrillLevel, row: any): { key: string; label: string } {
+// ── Normalized hierarchy dimensions for one row (spend OR conversion) ────────
+interface Dims {
+  source:        string | null;
+  medium:        string | null;
+  campaign_id:   string | null;
+  campaign_name: string | null;
+  adset_id:      string | null;
+  adset_name:    string | null;
+  ad_id:         string | null;
+  ad_name:       string | null;
+}
+
+interface NameMaps {
+  campaign: Map<string, string>;   // campaign_id → canonical campaign_name
+  adset:    Map<string, string>;   // adset_id    → canonical adset_name
+  ad:       Map<string, string>;   // ad_id       → canonical ad_name
+}
+
+/**
+ * Canonical display name for a level. Prefers the Meta-side name looked up by
+ * ID (authoritative, survives renames in our data because spend is re-pulled),
+ * then the name the row carried, then the raw ID, then a placeholder.
+ */
+function nameFor(level: DrillLevel, d: Dims, names: NameMaps): string {
   switch (level) {
-    case 'source':   return { key: row.utm_source   || '(direct)',     label: row.utm_source   || '(direct)' };
-    case 'medium':   return { key: row.utm_medium   || '(none)',       label: row.utm_medium   || '(none)' };
-    case 'campaign': return { key: row.utm_campaign || '(no campaign)', label: row.utm_campaign || '(no campaign)' };
-    case 'adset':    return {
-      // Join on adset id carried in utm_term (set utm_term={{adset.id}}); meta side has adset_id.
-      key:   row.adset_id || row.utm_term || '(no adset)',
-      label: row.adset_name || row.utm_term || '(no adset)',
-    };
-    case 'ad':       return {
-      // Ad-level join key = the ad id carried in utm_content (set utm_content={{ad.id}}
-      // on the Meta ad URL). The meta-spend side also puts ad_id into utm_content (see the
-      // `synthetic` row below), so spend and conversions land in the SAME bucket.
-      // Joining on the immutable ad id — not the name — survives ad renames.
-      key:   row.utm_content || '(no ad)',
-      label: row.ad_name || row.utm_content || '(no ad)',
-    };
+    case 'source':   return d.source || '(direct)';
+    case 'medium':   return d.medium || '(none)';
+    case 'campaign': return (d.campaign_id ? names.campaign.get(d.campaign_id) : null) || d.campaign_name || d.campaign_id || '(no campaign)';
+    case 'adset':    return (d.adset_id    ? names.adset.get(d.adset_id)       : null) || d.adset_name    || d.adset_id    || '(no adset)';
+    case 'ad':       return (d.ad_id       ? names.ad.get(d.ad_id)             : null) || d.ad_name       || d.ad_id       || '(no ad)';
   }
 }
 
-type UtmSet = {
-  utm_source:   string | null;
-  utm_medium:   string | null;
-  utm_campaign: string | null;
-  utm_content:  string | null;
-  utm_term:     string | null;
-};
+/** Bucket key = the immutable ID (rename-proof); label = the canonical name. */
+function bucketKey(level: DrillLevel, d: Dims, names: NameMaps): { key: string; label: string } {
+  const label = nameFor(level, d, names);
+  switch (level) {
+    case 'source':   return { key: d.source || '(direct)',                       label };
+    case 'medium':   return { key: d.medium || '(none)',                         label };
+    case 'campaign': return { key: d.campaign_id || d.campaign_name || '(no campaign)', label };
+    case 'adset':    return { key: d.adset_id    || d.adset_name    || '(no adset)',    label };
+    case 'ad':       return { key: d.ad_id       || d.ad_name       || '(no ad)',       label };
+  }
+}
 
+const UTM_KEYS = [
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+  'utm_adset', 'utm_adid', 'utm_adsetid', 'utm_campaignid',
+] as const;
+
+type UtmSet = Record<(typeof UTM_KEYS)[number], string | null>;
+
+/** Merge UTM candidates — first non-null wins (event row, then contact). */
 function resolveUtms(...candidates: Array<Partial<UtmSet> | null | undefined>): UtmSet {
-  const out: UtmSet = {
-    utm_source: null, utm_medium: null, utm_campaign: null, utm_content: null, utm_term: null,
-  };
+  const out = Object.fromEntries(UTM_KEYS.map((k) => [k, null])) as UtmSet;
   for (const c of candidates) {
     if (!c) continue;
-    if (!out.utm_source   && c.utm_source)   out.utm_source   = c.utm_source;
-    if (!out.utm_medium   && c.utm_medium)   out.utm_medium   = c.utm_medium;
-    if (!out.utm_campaign && c.utm_campaign) out.utm_campaign = c.utm_campaign;
-    if (!out.utm_content  && c.utm_content)  out.utm_content  = c.utm_content;
-    if (!out.utm_term     && c.utm_term)     out.utm_term     = c.utm_term;
+    for (const k of UTM_KEYS) {
+      if (!out[k] && (c as any)[k]) out[k] = (c as any)[k];
+    }
   }
   return out;
+}
+
+/** A conversion (page view / pipeline event / contact) → hierarchy dimensions. */
+function utmDims(u: UtmSet): Dims {
+  return {
+    source:        u.utm_source,
+    medium:        u.utm_medium,
+    campaign_id:   u.utm_campaignid,
+    campaign_name: u.utm_campaign,
+    adset_id:      u.utm_adsetid,
+    adset_name:    u.utm_adset,
+    ad_id:         u.utm_adid,
+    ad_name:       u.utm_content,
+  };
+}
+
+/** A Meta spend row → hierarchy dimensions. */
+function spendDims(rr: any): Dims {
+  return {
+    source:        SPEND_SOURCE,
+    medium:        SPEND_MEDIUM,
+    campaign_id:   rr.campaign_id ?? null,
+    campaign_name: rr.campaign_name ?? null,
+    adset_id:      rr.adset_id ?? null,
+    adset_name:    rr.adset_name ?? null,
+    ad_id:         rr.ad_id ?? null,
+    ad_name:       rr.ad_name ?? null,
+  };
 }
 
 export async function aggregateAttribution(
@@ -147,10 +216,12 @@ export async function aggregateAttribution(
     sb.from('meta_ad_performance').select('*').gte('date', fromISO).lte('date', toISO),
     sb.from('page_view_events').select('*').gte('event_time', fromISO).lte('event_time', toEnd),
     sb.from('ghl_pipeline_events').select('*').gte('event_time', fromISO).lte('event_time', toEnd),
-    sb.from('ghl_contacts').select('id,utm_source,utm_medium,utm_campaign,utm_content,utm_term'),
+    sb.from('ghl_contacts').select(
+      'id,utm_source,utm_medium,utm_campaign,utm_content,utm_term,utm_adset,utm_adid,utm_adsetid,utm_campaignid',
+    ),
     // Only loaded when we're drilled to ad level — saves a fetch otherwise.
     level === 'ad'
-      ? sb.from('ad_creatives').select('ad_name, thumbnail_url, permalink_url')
+      ? sb.from('ad_creatives').select('ad_id, thumbnail_url, permalink_url')
       : Promise.resolve({ data: [] as any[], error: null as any }),
   ]);
 
@@ -161,24 +232,35 @@ export async function aggregateAttribution(
     return [];
   }
 
-  // ad_name → creative URLs (only when level === 'ad')
-  const creativeByName = new Map<string, { thumbnail_url: string | null; permalink_url: string | null }>();
-  for (const c of creativesRes.data ?? []) {
-    const cc = c as any;
-    if (cc.ad_name) creativeByName.set(cc.ad_name, { thumbnail_url: cc.thumbnail_url, permalink_url: cc.permalink_url });
+  // Canonical ID→name maps from Meta spend (the authoritative source of names).
+  const names: NameMaps = { campaign: new Map(), adset: new Map(), ad: new Map() };
+  for (const r of spendRes.data ?? []) {
+    const rr = r as any;
+    if (rr.campaign_id && rr.campaign_name) names.campaign.set(rr.campaign_id, rr.campaign_name);
+    if (rr.adset_id    && rr.adset_name)    names.adset.set(rr.adset_id, rr.adset_name);
+    if (rr.ad_id       && rr.ad_name)       names.ad.set(rr.ad_id, rr.ad_name);
   }
 
-  // contact_id → contact's UTMs
+  // ad_id → creative URLs (only when level === 'ad')
+  const creativeById = new Map<string, { thumbnail_url: string | null; permalink_url: string | null }>();
+  for (const c of creativesRes.data ?? []) {
+    const cc = c as any;
+    if (cc.ad_id) creativeById.set(cc.ad_id, { thumbnail_url: cc.thumbnail_url, permalink_url: cc.permalink_url });
+  }
+
+  // contact_id → contact's UTMs (fallback when an event row lacks them)
   const contactUtms = new Map<number, UtmSet>();
   for (const c of contactsRes.data ?? []) {
     const cc = c as any;
-    contactUtms.set(cc.id, {
-      utm_source:   cc.utm_source,
-      utm_medium:   cc.utm_medium,
-      utm_campaign: cc.utm_campaign,
-      utm_content:  cc.utm_content,
-      utm_term:     cc.utm_term,
-    });
+    contactUtms.set(cc.id, resolveUtms(cc));
+  }
+
+  // Name-based scope filter (matches what the dashboard passes on drill-down).
+  function passesFilter(d: Dims): boolean {
+    if (filter.source   && nameFor('source',   d, names) !== filter.source)   return false;
+    if (filter.campaign && nameFor('campaign', d, names) !== filter.campaign) return false;
+    if (filter.adset    && nameFor('adset',    d, names) !== filter.adset)    return false;
+    return true;
   }
 
   // For unique_booked deduping
@@ -199,21 +281,11 @@ export async function aggregateAttribution(
     const status: string | undefined =
       (rr.effective_status as string | null) ?? rr.raw_payload?.effective_status ?? undefined;
 
-    if (filter.source && filter.source !== 'meta') continue;
-    if (filter.campaign && rr.campaign_name !== filter.campaign) continue;
-    if (filter.adset    && rr.adset_name    !== filter.adset)    continue;
-    if (filter.active && !isActiveStatus(status))                continue;
+    const d = spendDims(rr);
+    if (!passesFilter(d)) continue;
+    if (filter.active && !isActiveStatus(status)) continue;
 
-    const synthetic = {
-      utm_source:   'meta',
-      utm_medium:   'paid-social',
-      utm_campaign: rr.campaign_name,
-      utm_content:  rr.ad_id,        // ad-level join key — matches the lead's utm_content={{ad.id}}
-      ad_name:      rr.ad_name,      // display label for the ad row
-      adset_name:   rr.adset_name,
-      adset_id:     rr.adset_id,
-    };
-    const { key, label } = bucketKey(level, synthetic);
+    const { key, label } = bucketKey(level, d, names);
     const b = bucket(key, label, status);
 
     b.spend              += Number(rr.spend)              || 0;
@@ -231,28 +303,21 @@ export async function aggregateAttribution(
   for (const r of pvRes.data ?? []) {
     const rr = r as any;
     const contactRow = rr.contact_id ? contactUtms.get(rr.contact_id) : null;
-    const utms = resolveUtms(rr, contactRow);
+    const d = utmDims(resolveUtms(rr, contactRow));
+    if (!passesFilter(d)) continue;
 
-    if (filter.source   && (utms.utm_source   || '(direct)')     !== filter.source)   continue;
-    if (filter.campaign && (utms.utm_campaign || '(no campaign)') !== filter.campaign) continue;
-    if (filter.adset && (level === 'adset' || level === 'ad')) continue;
-
-    const { key, label } = bucketKey(level, utms);
-    const b = bucket(key, label);
-    b.page_views += 1;
+    const { key, label } = bucketKey(level, d, names);
+    bucket(key, label).page_views += 1;
   }
 
   // ── Pipeline events (GHL) ─────────────────────────────────────────
   for (const r of evRes.data ?? []) {
     const rr = r as any;
     const contactRow = rr.contact_id ? contactUtms.get(rr.contact_id) : null;
-    const utms = resolveUtms(rr, contactRow);
+    const d = utmDims(resolveUtms(rr, contactRow));
+    if (!passesFilter(d)) continue;
 
-    if (filter.source   && (utms.utm_source   || '(direct)')     !== filter.source)   continue;
-    if (filter.campaign && (utms.utm_campaign || '(no campaign)') !== filter.campaign) continue;
-    if (filter.adset    && (level === 'adset' || level === 'ad')) continue;
-
-    const { key, label } = bucketKey(level, utms);
+    const { key, label } = bucketKey(level, d, names);
     const b = bucket(key, label);
 
     switch (rr.event_name) {
@@ -280,7 +345,7 @@ export async function aggregateAttribution(
   }
 
   const out = Array.from(bucketsMap.values()).map((b) => {
-    const creative = level === 'ad' ? creativeByName.get(b.label) : undefined;
+    const creative = level === 'ad' ? creativeById.get(b.key) : undefined;
     return {
       ...b,
       thumbnail_url: creative?.thumbnail_url ?? null,

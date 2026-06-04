@@ -44,7 +44,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           <Field label="Opted in" value={j.contact.opted_in_at ? fmtTime(j.contact.opted_in_at) : null} />
           <Field label="Clarity session" value={
             j.contact.clarity_session_url
-              ? <a href={j.contact.clarity_session_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Watch ↗</a>
+              ? <a href={j.contact.clarity_session_url} target="_blank" rel="noopener noreferrer" className="text-brand-700 hover:underline">Watch ↗</a>
               : null
           } />
         </div>
@@ -96,7 +96,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           <select
             name="lead_status"
             defaultValue={j.contact.lead_status ?? ''}
-            className="px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="px-2 py-1 rounded border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-400"
           >
             <option value="">— none —</option>
             <option value="new">new</option>
@@ -109,7 +109,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           </select>
           <button
             type="submit"
-            className="ml-auto px-3 py-1.5 text-xs font-medium rounded bg-slate-900 text-white hover:bg-slate-700"
+            className="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg bg-brand text-white hover:bg-brand-700"
           >
             Save
           </button>
@@ -119,7 +119,7 @@ export default async function LeadDetailPage({ params }: { params: { id: string 
           rows={4}
           defaultValue={j.contact.notes ?? ''}
           placeholder="Notes about this lead — sales-call recap, objections, next steps…"
-          className="w-full px-3 py-2 rounded border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y"
+          className="w-full px-3 py-2 rounded border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-400 resize-y"
         />
       </form>
 

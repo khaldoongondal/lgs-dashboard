@@ -19,6 +19,9 @@
 
 import { maybeServiceClient } from '@/lib/supabase/server';
 
+// Must match the utm_source set in the Meta Ads Manager URL parameters.
+const SPEND_SOURCE = 'facebook';
+
 // ─────────────────────────────────────────────────────────────────────
 // 1. Ad × Close Rate
 // ─────────────────────────────────────────────────────────────────────
@@ -56,35 +59,43 @@ export async function adByCloseRate(fromISO: string, toISO: string, filter: Insi
 
   const [evRes, spendRes, contactsRes] = await Promise.all([
     sb.from('ghl_pipeline_events')
-      .select('event_name, deal_value, utm_campaign, utm_content, contact_id')
+      .select('event_name, deal_value, utm_source, utm_campaign, utm_content, utm_adid, contact_id')
       .gte('event_time', fromISO).lte('event_time', toEnd),
     sb.from('meta_ad_performance')
-      .select('campaign_name, ad_name, spend')
+      .select('campaign_name, ad_id, ad_name, spend')
       .gte('date', fromISO).lte('date', toISO),
     sb.from('ghl_contacts')
-      .select('id, utm_campaign, utm_content'),
+      .select('id, utm_source, utm_campaign, utm_content, utm_adid'),
   ]);
   if (evRes.error || spendRes.error || contactsRes.error) return [];
 
-  // contact_id → fallback UTMs
-  const contactUtms = new Map<number, { campaign: string | null; content: string | null }>();
-  for (const c of contactsRes.data ?? []) {
-    const cc = c as any;
-    contactUtms.set(cc.id, { campaign: cc.utm_campaign, content: cc.utm_content });
+  // ad_id → canonical campaign / ad name from Meta spend (authoritative).
+  const adCampaign = new Map<string, string>();
+  const adName     = new Map<string, string>();
+  for (const r of spendRes.data ?? []) {
+    const rr = r as any;
+    if (rr.ad_id && rr.campaign_name) adCampaign.set(rr.ad_id, rr.campaign_name);
+    if (rr.ad_id && rr.ad_name)       adName.set(rr.ad_id, rr.ad_name);
   }
 
-  // Bucket by (campaign, ad_name)
+  // contact_id → fallback UTMs (ad id + names)
+  const contactUtms = new Map<number, any>();
+  for (const c of contactsRes.data ?? []) {
+    const cc = c as any;
+    contactUtms.set(cc.id, cc);
+  }
+
+  // Bucket by ad_id (rename-proof); fall back to ad name when id is missing.
   const map = new Map<string, AdCloseRow>();
-  function bucket(campaign: string, ad_name: string): AdCloseRow {
-    const k = `${campaign}|${ad_name}`;
-    let b = map.get(k);
+  function bucket(key: string, campaign: string, ad_name: string): AdCloseRow {
+    let b = map.get(key);
     if (!b) {
       b = {
         campaign, ad_name,
         leads: 0, booked: 0, shown: 0, closes: 0, revenue: 0, spend: 0,
         close_rate: null, cpl: null, cac: null, roas: null,
       };
-      map.set(k, b);
+      map.set(key, b);
     }
     return b;
   }
@@ -94,20 +105,23 @@ export async function adByCloseRate(fromISO: string, toISO: string, filter: Insi
     const rr = r as any;
     const campaign = rr.campaign_name || '(no campaign)';
     const ad_name  = rr.ad_name       || '(no ad)';
-    // For ad spend we treat utm_source as 'meta' (it's a Meta spend row).
-    if (!matchUtm('meta', campaign, filter)) continue;
-    bucket(campaign, ad_name).spend += Number(rr.spend) || 0;
+    const key      = rr.ad_id || ad_name;
+    // Spend rows are inherently the Meta source.
+    if (!matchUtm(SPEND_SOURCE, campaign, filter)) continue;
+    bucket(key, campaign, ad_name).spend += Number(rr.spend) || 0;
   }
 
   // Pipeline events
   for (const r of evRes.data ?? []) {
     const rr = r as any;
     const cu = rr.contact_id ? contactUtms.get(rr.contact_id) : null;
-    const utm_source = rr.utm_source || (rr.contact_id ? (cu as any)?.source : null);
-    const campaign = rr.utm_campaign || cu?.campaign || '(no campaign)';
-    const ad_name  = rr.utm_content  || cu?.content  || '(no ad)';
-    if (!matchUtm(utm_source || null, campaign, filter)) continue;
-    const b = bucket(campaign, ad_name);
+    const utm_source = rr.utm_source || cu?.utm_source || null;
+    const adId     = rr.utm_adid || cu?.utm_adid || null;
+    const campaign = (adId && adCampaign.get(adId)) || rr.utm_campaign || cu?.utm_campaign || '(no campaign)';
+    const ad_name  = (adId && adName.get(adId))     || rr.utm_content  || cu?.utm_content  || '(no ad)';
+    const key      = adId || ad_name;
+    if (!matchUtm(utm_source, campaign, filter)) continue;
+    const b = bucket(key, campaign, ad_name);
     switch (rr.event_name) {
       case 'Lead':              b.leads  += 1; break;
       case 'AppointmentBooked': b.booked += 1; break;

@@ -106,12 +106,12 @@ export default function AskChat() {
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask anything about your ads, leads, sales, or clients…"
           disabled={busy}
-          className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-50"
+          className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-400 disabled:bg-slate-50"
         />
         <button
           type="submit"
           disabled={busy || !input.trim()}
-          className="px-4 py-2 text-sm font-medium bg-slate-900 text-white rounded-lg disabled:opacity-40"
+          className="px-4 py-2 text-sm font-medium bg-brand text-white rounded-lg hover:bg-brand-700 disabled:opacity-40"
         >
           {busy ? 'Thinking…' : 'Ask'}
         </button>
@@ -146,7 +146,7 @@ function Bubble({ turn }: { turn: Turn }) {
   if (turn.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] px-3 py-2 bg-slate-900 text-white text-sm rounded-lg whitespace-pre-wrap">
+        <div className="max-w-[80%] px-3 py-2 bg-brand text-white text-sm rounded-2xl rounded-br-sm whitespace-pre-wrap">
           {turn.content}
         </div>
       </div>

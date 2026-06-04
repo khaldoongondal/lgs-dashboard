@@ -35,8 +35,10 @@ export const env = {
 
   // GHL
   ghlApiKey:          () => optionalEnv('GHL_API_KEY'),
+  ghlApiToken:        () => optionalEnv('GHL_API_TOKEN'),   // Private Integration / API v2 token
   ghlLocationId:      () => optionalEnv('GHL_LOCATION_ID'),
   ghlWebhookSecret:   () => optionalEnv('GHL_WEBHOOK_SECRET'),
+  ghlApiVersion:      () => optionalEnv('GHL_API_VERSION') || '2021-07-28',
 
   // GA4 (funnel page-view metrics — service-account auth)
   ga4PropertyId:        () => optionalEnv('GA4_PROPERTY_ID'),

@@ -52,3 +52,36 @@ export const IconBox = (p: Props) => (
 export const IconRefresh = (p: Props) => (
   <svg {...base} {...p}><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /></svg>
 );
+export const IconCheck = (p: Props) => (
+  <svg {...base} {...p}><path d="M20 6 9 17l-5-5" /></svg>
+);
+export const IconX = (p: Props) => (
+  <svg {...base} {...p}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+);
+export const IconBolt = (p: Props) => (
+  <svg {...base} {...p}><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" /></svg>
+);
+export const IconLink = (p: Props) => (
+  <svg {...base} {...p}><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5" /><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5" /></svg>
+);
+export const IconTarget = (p: Props) => (
+  <svg {...base} {...p}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.5" /></svg>
+);
+export const IconRocket = (p: Props) => (
+  <svg {...base} {...p}><path d="M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2a3 3 0 0 0-3-3z" /><path d="M9 11a14 14 0 0 1 7-8c2.5 0 4 .5 4 .5s.5 1.5.5 4a14 14 0 0 1-8 7l-3.5-3.5z" /><path d="M9 11 7 13l4 4 2-2" /><circle cx="15" cy="9" r="1.5" /></svg>
+);
+export const IconMessage = (p: Props) => (
+  <svg {...base} {...p}><path d="M21 11.5a8.5 8.5 0 0 1-12.3 7.6L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5z" /></svg>
+);
+export const IconPlay = (p: Props) => (
+  <svg {...base} {...p}><path d="M6 4l14 8-14 8V4z" /></svg>
+);
+export const IconMenu = (p: Props) => (
+  <svg {...base} {...p}><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+);
+export const IconStar = (p: Props) => (
+  <svg {...base} fill="currentColor" stroke="none" {...p}><path d="M12 2.5 14.9 8.6 21.5 9.5 16.7 14.1 17.9 20.6 12 17.5 6.1 20.6 7.3 14.1 2.5 9.5 9.1 8.6 12 2.5z" /></svg>
+);
+export const IconShield = (p: Props) => (
+  <svg {...base} {...p}><path d="M12 3 5 6v5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-3z" /><path d="m9 12 2 2 4-4" /></svg>
+);

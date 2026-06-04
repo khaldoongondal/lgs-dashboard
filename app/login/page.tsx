@@ -1,4 +1,5 @@
 import { login } from './actions';
+import Logo from '@/components/logo';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,11 +16,15 @@ export default function LoginPage({
         : null;
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-4">
-      <div className="card-pad w-full max-w-sm">
-        <div className="mb-6 text-center">
-          <div className="text-xs uppercase tracking-widest text-slate-500">LGS</div>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-900">Growth Dashboard</h1>
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
+      {/* soft green backdrop */}
+      <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-brand-50 via-white to-white" />
+      <div className="pointer-events-none absolute left-1/2 top-[-15%] -z-10 h-[420px] w-[680px] -translate-x-1/2 rounded-full bg-brand-200/40 blur-3xl" />
+
+      <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-7 shadow-soft">
+        <div className="mb-6 flex flex-col items-center text-center">
+          <Logo />
+          <p className="mt-4 text-sm text-slate-500">Sign in to your growth dashboard</p>
         </div>
 
         <form action={login} className="space-y-4">

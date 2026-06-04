@@ -202,10 +202,7 @@ export default async function DashboardPage({
                   level: l.value,
                   source: filter.source, campaign: filter.campaign, adset: filter.adset,
                 })}
-                className={[
-                  'px-3 py-1.5 rounded-lg text-xs font-medium',
-                  active ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
-                ].join(' ')}
+                className={`pill ${active ? 'pill-active' : ''}`}
               >
                 {l.label}
               </Link>
@@ -215,12 +212,7 @@ export default async function DashboardPage({
 
         <Link
           href={activeHref}
-          className={[
-            'px-3 py-1.5 rounded-lg text-xs font-medium border',
-            filter.active
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50',
-          ].join(' ')}
+          className={`pill ${filter.active ? 'pill-active' : ''}`}
         >
           {filter.active ? '✓ Active only' : 'Active only'}
         </Link>
@@ -241,10 +233,7 @@ export default async function DashboardPage({
                 level,
                 source: filter.source, campaign: filter.campaign, adset: filter.adset,
               })}
-              className={[
-                'px-3 py-1.5 rounded-lg text-xs font-medium',
-                active ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50',
-              ].join(' ')}
+              className={`pill ${active ? 'pill-active' : ''}`}
             >
               {v.label}
             </Link>
@@ -351,7 +340,7 @@ function DrillTable({
           }) : null;
 
           const labelCell = drillHref ? (
-            <Link href={drillHref} className="text-indigo-600 hover:underline">{r.label}</Link>
+            <Link href={drillHref} className="font-medium text-brand-700 hover:underline">{r.label}</Link>
           ) : (
             <span>{r.label}</span>
           );

@@ -102,12 +102,12 @@ export default async function SettingsPage({ searchParams }: { searchParams: { p
                           step="0.01"
                           name="value"
                           defaultValue={displayValue}
-                          className="w-24 px-2 py-1 rounded border border-slate-200 text-right text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          className="w-24 px-2 py-1 rounded border border-slate-200 text-right text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-brand-400"
                         />
                         <span className="text-xs text-slate-500 w-4">{isPct ? '%' : '$'}</span>
                         <button
                           type="submit"
-                          className="ml-1 px-2 py-1 text-xs font-medium rounded bg-slate-900 text-white hover:bg-slate-700"
+                          className="ml-1 px-2 py-1 text-xs font-medium rounded-lg bg-brand text-white hover:bg-brand-700"
                         >
                           Save
                         </button>

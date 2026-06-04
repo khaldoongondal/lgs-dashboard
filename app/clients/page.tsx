@@ -71,7 +71,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: SP }
               href={buildHref({ ...baseParams, status: s.v === 'all' ? undefined : s.v })}
               className={[
                 'px-3 py-1.5 rounded-lg text-xs font-medium border',
-                active ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50',
+                active ? 'bg-brand-50 text-brand-700 border-brand-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50',
               ].join(' ')}
             >
               {s.label}{count > 0 ? ` (${count})` : ''}
@@ -110,7 +110,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: SP }
                   <tr key={r.id}>
                     <td className="font-medium text-slate-900">
                       {r.contact_id ? (
-                        <Link href={`/leads/${r.contact_id}`} className="text-indigo-600 hover:underline">{name}</Link>
+                        <Link href={`/leads/${r.contact_id}`} className="text-brand-700 hover:underline">{name}</Link>
                       ) : name}
                     </td>
                     <td>

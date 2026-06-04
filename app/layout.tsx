@@ -9,8 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'LGS Growth Dashboard',
-  description: 'Ad attribution, sales pipeline, and business metrics for LGS.',
+  title: 'Mission Control — Growth Dashboard',
+  description: 'Ad attribution, sales pipeline, and business metrics — your growth command center.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

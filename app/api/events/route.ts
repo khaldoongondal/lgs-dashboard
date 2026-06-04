@@ -85,6 +85,7 @@ export async function POST(req: Request) {
     page_url, page_slug, referrer,
     fingerprint, fbclid, fbp, fbc: rawFbc,
     utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+    utm_adset, utm_adid, utm_adsetid, utm_campaignid,
     user_agent, screen_res,
   } = body ?? {};
 
@@ -119,6 +120,7 @@ export async function POST(req: Request) {
         fbp,
         fbc,
         utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+        utm_adset, utm_adid, utm_adsetid, utm_campaignid,
         client_ip: clientIp,
         user_agent: ua,
         device_type: uaSignals.device_type,

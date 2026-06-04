@@ -47,7 +47,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: { pres
                 return (
                   <tr key={r.id}>
                     <td className="font-medium text-slate-900">
-                      <Link href={`/leads/${r.id}`} className="text-indigo-600 hover:underline">
+                      <Link href={`/leads/${r.id}`} className="text-brand-700 hover:underline">
                         {name}
                       </Link>
                     </td>
