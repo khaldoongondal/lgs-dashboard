@@ -10,6 +10,7 @@
  */
 
 import { maybeServiceClient } from '@/lib/supabase/server';
+import type { RepMonthCell, SalesYearData } from '@/lib/sales-calc';
 
 // ── Tier thresholds (spec'd as fixed; rates are editable) ──────────────
 const TIER_1_CAP = 10_000;
@@ -214,6 +215,72 @@ export async function loadSalesSummary(fromISO: string, toISO: string): Promise<
   }, tiers);
 
   return { rows, total, avg, tiers };
+}
+
+/**
+ * Per-(rep × month) rollup for one calendar year. The dashboard's rep
+ * checkboxes, month selector, charts, and time-period table all derive from
+ * this single dataset client-side — so toggling a rep never hits the server.
+ */
+export async function loadSalesYear(year: number): Promise<SalesYearData> {
+  const sb = maybeServiceClient();
+  const tiers = sb ? await loadTierRates(sb) : DEFAULT_TIERS;
+  if (!sb) return { year, reps: [], cells: [], tiers };
+
+  const from = `${year}-01-01`;
+  const to   = `${year}-12-31`;
+
+  const { data, error } = await sb
+    .from('sales_metrics')
+    .select('*')
+    .gte('date', from)
+    .lte('date', to);
+
+  if (error) {
+    console.warn('[sales] loadSalesYear supabase error:', error.message);
+    return { year, reps: [], cells: [], tiers };
+  }
+
+  // Collapse rep×day rows into one cell per (rep, month).
+  const cellMap = new Map<string, RepMonthCell>();
+  const repNames = new Map<string, string>();
+
+  for (const r of data ?? []) {
+    const rr = r as any;
+    const repId = (rr.rep_id as string) || '(unassigned)';
+    const repName =
+      rr.rep_name || (repId === '(unassigned)' ? 'Unassigned' : repId);
+    repNames.set(repId, repName);
+
+    // sales_metrics.date is 'YYYY-MM-DD'; month index from the month segment.
+    const month = Number(String(rr.date).slice(5, 7)) - 1;
+    if (month < 0 || month > 11) continue;
+
+    const key = `${repId}|${month}`;
+    let cell = cellMap.get(key);
+    if (!cell) {
+      cell = {
+        rep_id: repId, rep_name: repName, month,
+        intro_calls: 0, live_intros: 0, offers_made: 0, deposits: 0, closes: 0,
+        verbal_commitments: 0, collected: 0, total_revenue: 0,
+      };
+      cellMap.set(key, cell);
+    }
+    cell.intro_calls        += Number(rr.intro_calls)        || 0;
+    cell.live_intros        += Number(rr.live_intros)        || 0;
+    cell.offers_made        += Number(rr.offers_made)        || 0;
+    cell.deposits           += Number(rr.deposits)           || 0;
+    cell.closes             += Number(rr.closes)             || 0;
+    cell.verbal_commitments += Number(rr.verbal_commitments) || 0;
+    cell.collected          += Number(rr.collected)          || 0;
+    cell.total_revenue      += Number(rr.total_revenue)      || 0;
+  }
+
+  const reps = Array.from(repNames.entries())
+    .map(([rep_id, rep_name]) => ({ rep_id, rep_name }))
+    .sort((a, b) => a.rep_name.localeCompare(b.rep_name));
+
+  return { year, reps, cells: Array.from(cellMap.values()), tiers };
 }
 
 function emptySummary(tiers: TierRates): SalesSummary {
